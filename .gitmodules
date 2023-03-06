@@ -1,0 +1,3 @@
+[submodule "pyboreas"]
+	path = external/pyboreas
+	url = https://github.com/utiasASRL/pyboreas.git
