@@ -1,2 +1,24 @@
-data/
+# Commit the .gitignore
+!.gitignore
+
+# Build files
+cmake-*
+cmake-build*
+
+# Python
 venv
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ROS2
+build/
+install/
+log/
+
+# Heavy IO
+data/
+results/
+
+#
+.vscode/
