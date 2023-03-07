@@ -46,11 +46,6 @@ def main(dataset_dir):
       #print("Loaded number of bev_scan messages: ", len(bev_messages))
       print("Loaded number of filtered_point_cloud messages: ", len(pc_messages))
 
-      # Save pointcloud to csv file
-      pc_file_name = osp.join(dataset_dir, "pc_{}.csv".format(bag_file[:-6]))
-      # Overwrite file to blank
-      open(pc_file_name, 'w').close()
-
       # Loop through messages and save timestamp and point cloud to file
       for message in pc_messages:
         # Compute timestamp
@@ -60,13 +55,12 @@ def main(dataset_dir):
         # Save point cloud as array of tuples (x, y, z, normal_x, normal_y, normal_z)
         pc_xyz = pc2.read_points(message[1], skip_nans=True, field_names=("x", "y", "z", "normal_x", "normal_y", "normal_z"))
 
-        # Write to file
-        with open(pc_file_name, "a+") as f:
-          writer = csv.writer(f, delimiter=",")
-          for point in pc_xyz:
-            writer.writerow([timestamp, point[0], point[1], point[2], point[3], point[4], point[5]])
-      
-      print("Written to file:", pc_file_name)
+        # Write point cloud to binary file named after timestamp
+        pc_file_name = osp.join(dataset_dir, str(timestamp) + ".bin")
+        # Extract all x, y, z, normal_x, normal_y, normal_z values from point cloud
+        pc_xyz = np.array(list(pc_xyz))
+        # Save point cloud to binary file
+        pc_xyz.tofile(pc_file_name)
 
 if __name__ == "__main__":
 
