@@ -4,6 +4,6 @@
 [submodule "external/ICP_simulator"]
 	path = external/ICP_simulator
 	url = git@github.com:utiasASRL/ICP_simulator.git
-[submodule "external/diff_ICP"]
-	path = external/diff_ICP
-	url = git@github.com:lisusdaniil/diff_ICP.git
+[submodule "external/dICP"]
+	path = external/dICP
+	url = git@github.com:lisusdaniil/dICP.git
