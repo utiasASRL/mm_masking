@@ -56,6 +56,7 @@ def main(dataset_dir, result_dir, output_dir):
   odo_input = osp.basename(result_dir)
   loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
+  loc_inputs = loc_inputs[:1]
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input)
   print("Localization Runs:", loc_inputs)
@@ -103,6 +104,7 @@ def main(dataset_dir, result_dir, output_dir):
     for message in messages:
       test_seq_timestamp_full = int(int(message[1].timestamp) / 1000)
       map_seq_timestamp_full = int(int(message[1].vertex_timestamp) / 1000)
+      map_seq_vertex_id = message[1].vertex_id
 
       if not int(message[1].timestamp / precision) in ground_truth_poses_loc.keys():
         print("WARNING: time stamp not found 1: ", int(message[1].timestamp / precision))
@@ -120,7 +122,7 @@ def main(dataset_dir, result_dir, output_dir):
       T_map_test_in_radar_gt = T_test_map_in_radar_gt.flatten().tolist()[:12]
       result_gt.append([test_seq_timestamp_full, map_seq_timestamp_full] + T_map_test_in_radar_gt)
 
-    output_dir_gt = osp.join(output_dir, "localization_result_gt")
+    output_dir_gt = osp.join(output_dir, "localization_gt", odo_input)
     os.makedirs(output_dir_gt, exist_ok=True)
     with open(osp.join(output_dir_gt, loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
@@ -135,9 +137,9 @@ if __name__ == "__main__":
   # Assuming following path structure:
   # <rosbag name>/metadata.yaml
   # <rosbag name>/<rosbag name>_0.db3
-  parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
-  parser.add_argument('--results', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
-  parser.add_argument('--output_path', default=os.getcwd(), type=str, help='path to output')
+  parser.add_argument('--dataset', default='/raid/dli/boreas', type=str, help='path to boreas dataset (contains boreas-*)')
+  parser.add_argument('--results', default='/home/dli/ext_proj_repos/radar_topometric_localization/results/radar/boreas-2020-11-26-13-58', type=str, help='path to vtr folder')
+  parser.add_argument('--output_path', default='/home/dli/mm_masking/data', type=str, help='path to output')
 
   args = parser.parse_args()
 

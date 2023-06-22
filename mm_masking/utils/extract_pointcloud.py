@@ -5,6 +5,7 @@ import numpy as np
 import sensor_msgs_py.point_cloud2 as pc2
 import numpy.linalg as npla
 import csv
+import matplotlib.pyplot as plt
 
 import sqlite3
 from rosidl_runtime_py.utilities import get_message
@@ -43,22 +44,38 @@ def main(dataset_dir):
       bag_parser = BagFileParser(full_path_bag_file)
       #bev_messages = bag_parser.get_bag_messages("/vtr/bev_scan")
       pc_messages = bag_parser.get_bag_messages("/vtr/filtered_point_cloud")
+      map_pc_messages = bag_parser.get_bag_messages("/vtr/submap_odo")
       #print("Loaded number of bev_scan messages: ", len(bev_messages))
       print("Loaded number of filtered_point_cloud messages: ", len(pc_messages))
 
       # Loop through messages and save timestamp and point cloud to file
-      for message in pc_messages:
+      for idx, message in enumerate(pc_messages):
         # Compute timestamp
         timestamp = message[1].header.stamp.sec + message[1].header.stamp.nanosec * 1e-9
         timestamp = int(timestamp * 1e6)
 
         # Save point cloud as array of tuples (x, y, z, normal_x, normal_y, normal_z)
-        pc_xyz = pc2.read_points(message[1], skip_nans=True, field_names=("x", "y", "z", "normal_x", "normal_y", "normal_z"))
+        pc_xyz = pc2.read_points_list(message[1], skip_nans=True, field_names=("x", "y", "z", "normal_x", "normal_y", "normal_z"))
+        pc_xyz = np.array(pc_xyz)
 
         # Write point cloud to binary file named after timestamp
         pc_file_name = osp.join(dataset_dir, str(timestamp) + ".bin")
-        # Extract all x, y, z, normal_x, normal_y, normal_z values from point cloud
-        pc_xyz = np.array(list(pc_xyz))
+        
+        # Save point cloud to binary file
+        pc_xyz.tofile(pc_file_name)
+
+      for idx, message in enumerate(map_pc_messages):
+        # Compute timestamp
+        timestamp = message[1].header.stamp.sec + message[1].header.stamp.nanosec * 1e-9
+        timestamp = int(timestamp * 1e6)
+
+        # Save point cloud as array of tuples (x, y, z, normal_x, normal_y, normal_z)
+        pc_xyz = pc2.read_points_list(message[1], skip_nans=True, field_names=("x", "y", "z", "normal_x", "normal_y", "normal_z"))
+        pc_xyz = np.array(pc_xyz)
+
+        # Write point cloud to binary file named after timestamp
+        pc_file_name = osp.join(dataset_dir, str(timestamp) + "_map.bin")
+        
         # Save point cloud to binary file
         pc_xyz.tofile(pc_file_name)
 
