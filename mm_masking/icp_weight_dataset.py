@@ -5,13 +5,15 @@ import os.path as osp
 from pyboreas.utils.odometry import read_traj_file2
 import matplotlib.pyplot as plt
 from pylgmath import se3op, Transformation
-from radar_utils import load_radar
+from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff
+from dICP.ICP import ICP
 
-class MaskingDataset():
+class ICPWeightDataset():
 
     def __init__(self, gt_data_dir, pc_dir, radar_dir, loc_pairs, sensor,
                  random=False, num_samples=-1, size_pc=-1, verbose=False,
-                 float_type=torch.float64, use_gt=False, gt_eye=True, pos_std=1.0, rot_std=0.1):
+                 float_type=torch.float64, use_gt=False, gt_eye=True, pos_std=1.0, rot_std=0.1,
+                 a_thresh=1.0, b_thresh=0.09):
         self.loc_pairs = loc_pairs
         self.size_pc = size_pc
         self.float_type = float_type
@@ -21,14 +23,12 @@ class MaskingDataset():
             torch.manual_seed(99)
 
         # Loop through loc_pairs and load in ground truth loc poses
-        self.T_loc_gt = []
-        self.T_loc_init = []
-        self.loc_radar_paths = []
-        self.loc_pc_paths = []
+        T_loc_gt = None
+        T_loc_init = None
+        map_pc_list = []
         self.loc_timestamps = []
-        self.map_cart_paths = []
-        self.map_pc_paths = []
         self.map_timestamps = []
+        
         for pair in loc_pairs:
             map_seq = pair[0]
             loc_seq = pair[1]
@@ -40,18 +40,12 @@ class MaskingDataset():
             T_gt, loc_times, map_times, _, _ = read_traj_file2(gt_file)
 
             # Find localization cartesian images with names corresponding to pred_times
-            loc_radar_paths = []
-            loc_pc_paths = []
-            map_cart_paths = []
-            map_pc_paths = []
             loc_timestamps = []
             map_timestamps = []
             all_fft_data = None
             all_azimuths = None
             all_az_timestamps = None
             incomplete_loc_times = []
-            T_gt_used = []
-            T_init_used = []
             for idx, loc_time in enumerate(loc_times):
                 # Load in localization paths
                 loc_radar_path = osp.join(radar_dir, loc_seq, str(loc_time) + '.png')
@@ -75,38 +69,30 @@ class MaskingDataset():
                     incomplete_loc_times.append(loc_time)
                     continue
                 else:
-                    # Load in cartesian images
-                    loc_radar_paths.append(loc_radar_path)
-                    # Map is submap so no cartesian image
-                    #map_cart_paths.append(map_cart_path)
-                    # Load in point cloud binaries
-                    loc_pc_paths.append(loc_pc_path)
-                    map_pc_paths.append(map_pc_path)
                     # Save timestamp
                     loc_timestamps.append(loc_time)
                     map_timestamps.append(map_times[idx])
-                    # Save fft data
 
-                    # Load in localization and map cartesian image
+                    # Save fft data
+                    # Load in localization polar image
                     loc_radar_img = cv2.imread(loc_radar_path, cv2.IMREAD_GRAYSCALE)
                     loc_radar_mat = np.asarray(loc_radar_img)
                     fft_data, azimuths, az_timestamps = load_radar(loc_radar_mat)
-                    fft_data = torch.tensor(fft_data, dtype=self.float_type)
-                    azimuths = torch.tensor(azimuths, dtype=self.float_type)
-                    az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+                    fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
+                    azimuths = torch.tensor(azimuths, dtype=self.float_type).unsqueeze(0)
+                    az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type).unsqueeze(0)
 
                     if all_fft_data is None:
-                        all_fft_data = fft_data.unsqueeze(0)
-                        all_azimuths = azimuths.unsqueeze(0)
-                        all_az_timestamps = az_timestamps.unsqueeze(0)
+                        all_fft_data = fft_data
+                        all_azimuths = azimuths
+                        all_az_timestamps = az_timestamps
                     else:
-                        all_fft_data = torch.cat((all_fft_data, fft_data.unsqueeze(0)), dim=0)
-                        all_azimuths = torch.cat((all_azimuths, azimuths.unsqueeze(0)), dim=0)
-                        all_az_timestamps = torch.cat((all_az_timestamps, az_timestamps.unsqueeze(0)), dim=0)
+                        all_fft_data = torch.cat((all_fft_data, fft_data), dim=0)
+                        all_azimuths = torch.cat((all_azimuths, azimuths), dim=0)
+                        all_az_timestamps = torch.cat((all_az_timestamps, az_timestamps), dim=0)
 
                     # Save ground truth localization to map pose
                     T_gt_idx = torch.tensor(T_gt[idx], dtype=float_type)
-                    T_gt_used.append(T_gt_idx)
                     # Also, generate random perturbation to ground truth pose
                     # The map pointcloud is transformed into the scan frame using T_gt
                     # T_init is the initial guess that is offset from T_gt that the ICP
@@ -126,13 +112,35 @@ class MaskingDataset():
                         xi_rand[5] = rot_std*xi_rand[5]
                         T_rand = Transformation(xi_ab=xi_rand)
                         if gt_eye:
-                            T_init_idx = T_rand.matrix()
+                            T_init_idx = T_rand.matrix() # @ identity
                         else:
                             T_init_idx = T_rand.matrix() @ T_gt[idx]
                     T_init_idx = torch.tensor(T_init_idx, dtype=float_type)
-                    T_init_used.append(T_init_idx)
+
+                    # Stack transformations
+                    if T_loc_gt is None:
+                        T_loc_gt = T_gt_idx.unsqueeze(0)
+                        T_loc_init = T_init_idx.unsqueeze(0)
+                    else:
+                        T_loc_gt = torch.cat((T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
+                        T_loc_init = torch.cat((T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
                 
-                if num_samples > 0 and len(loc_radar_paths) >= num_samples:
+                    # Load in map pointcloud
+                    map_pc_ii = load_pc_from_file(map_pc_path, to_type=self.float_type, flip_y=True)
+                    # If want groundtruth to be identity, transform map point cloud to scan frame
+                    if gt_eye:
+                        T_sm = torch.linalg.inv(T_gt_idx)
+                        # Transform points
+                        map_pc_ii[:, :3] = (T_sm[:3, :3] @ map_pc_ii[:, :3].T).T + T_sm[:3, 3]
+                        # Transform normals
+                        n_hg = torch.cat((map_pc_ii[:, 3:], torch.ones((map_pc_ii.shape[0], 1), dtype=self.float_type)), dim=1)
+                        n_hg = (torch.linalg.inv(T_sm).T @ n_hg.T).T
+                        map_pc_ii[:, 3:] = n_hg[:, :3]
+
+                    map_pc_list.append(map_pc_ii)
+
+
+                if num_samples > 0 and T_loc_gt.shape[0] >= num_samples:
                     break
             # Remove ground truth localization to map poses that do not have corresponding images
             if len(incomplete_loc_times) != 0:
@@ -144,12 +152,6 @@ class MaskingDataset():
                     map_times.pop(index)
                     T_gt.pop(index)
 
-            self.loc_radar_paths += loc_radar_paths
-            self.loc_pc_paths += loc_pc_paths
-            self.map_cart_paths += map_cart_paths
-            self.map_pc_paths += map_pc_paths
-            self.T_loc_gt += T_gt_used
-            self.T_loc_init += T_init_used
             #self.T_loc_init += T_gt_used
             self.loc_timestamps += loc_timestamps
             self.map_timestamps += map_timestamps
@@ -158,6 +160,44 @@ class MaskingDataset():
         self.azimuths = all_azimuths
         self.az_timestamps = all_az_timestamps
 
+
+        # Want to bind the range of polar data to fit within cartesian image
+        polar_res = 0.0596
+
+        # Precompute CFAR of fft data
+        self.fft_cfar = cfar_mask(all_fft_data, polar_res, a_thresh=a_thresh, b_thresh=b_thresh, diff=False)
+
+        # Extract pointcloud from fft data
+        if gt_eye:
+            T_scan_pc = T_loc_gt
+        else:
+            T_scan_pc = None
+        # Note, we've already transformed the map pointcloud to the scan frame
+        scan_pc_list = extract_pc(self.fft_cfar, polar_res, all_azimuths, all_az_timestamps,
+                                  T_ab=None, diff=False)
+
+        # Form batch of pointclouds and initial guesses for batching
+        config_path = '../external/dICP/config/dICP_config.yaml'
+        temp_ICP = ICP(config_path=config_path)
+        scan_pc_batch, map_pc_batch, _, _ = temp_ICP.batch_size_handling(scan_pc_list, map_pc_list)
+        # Want to bind the range of polar data to fit within cartesian image
+        cart_res = 0.2384
+        cart_pixel_width = 640
+        # Compute the range (m) captured by pixels in cartesian scan
+        if (cart_pixel_width % 2) == 0:
+            cart_min_range = (cart_pixel_width / 2 - 0.5) * cart_res
+        else:
+            cart_min_range = cart_pixel_width / 2 * cart_res
+        scan_pc_x_outrange = torch.abs(scan_pc_batch[:, :, 0]) > cart_min_range
+        scan_pc_y_outrange = torch.abs(scan_pc_batch[:, :, 1]) > cart_min_range
+        scan_pc_outrange = scan_pc_x_outrange | scan_pc_y_outrange
+        scan_pc_batch[scan_pc_outrange] = 0.0
+
+        self.scan_pc = scan_pc_batch
+        self.map_pc = map_pc_batch
+        self.T_loc_init = T_loc_init
+        self.T_loc_gt = T_loc_gt
+
         # Save fft data statistics for potential normalization
         self.fft_mean = torch.mean(self.fft_data)
         self.fft_std = torch.std(self.fft_data)
@@ -165,19 +205,22 @@ class MaskingDataset():
         self.fft_min = torch.min(self.fft_data)
 
         # Assert that the number of all lists are the same
-        assert len(self.T_loc_gt) == len(self.loc_radar_paths) \
-             == len(self.loc_pc_paths) == len(self.map_pc_paths) \
+        assert len(self.T_loc_gt) \
              == self.fft_data.shape[0] == self.azimuths.shape[0] \
              == self.az_timestamps.shape[0] == len(self.loc_timestamps)
 
     def __len__(self):
-        return len(self.T_loc_gt)
+        return self.T_loc_gt.shape[0]
 
     def __getitem__(self, index):
         # Load in fft data
         fft_data = self.fft_data[index]
         azimuths = self.azimuths[index]
         az_timestamps = self.az_timestamps[index]
+        fft_cfar = self.fft_cfar[index]
+        scan_pc = self.scan_pc[index]
+        map_pc = self.map_pc[index]
+        T_init = self.T_loc_init[index]
 
         # Load in timestamps
         loc_timestamp = self.loc_timestamps[index]
@@ -185,67 +228,12 @@ class MaskingDataset():
 
         # Load in ground truth localization to map pose
         T_ml_gt = self.T_loc_gt[index]
-        T_ml_init = self.T_loc_init[index]
 
         #loc_data = {'pc' : loc_pc, 'timestamp' : loc_timestamp}
-        loc_data = {'pc_path' : self.loc_pc_paths[index], 'timestamp' : loc_timestamp,
-                    'fft_data' : fft_data, 'azimuths' : azimuths, 'az_timestamps' : az_timestamps}
-        #loc_data = {'pc_path' : self.loc_pc_paths[index], 'radar_path': self.loc_radar_paths[index], 'timestamp' : loc_timestamp}
-        map_data = {'pc_path' : self.map_pc_paths[index], 'timestamp' : map_timestamp}
-        T_data = {'T_ml_init' : T_ml_init, 'T_ml_gt' : T_ml_gt}
+        loc_data = {'pc': scan_pc, 'timestamp' : loc_timestamp,
+                    'fft_data' : fft_data, 'azimuths' : azimuths, 'az_timestamps' : az_timestamps,
+                    'fft_cfar' : fft_cfar}
+        map_data = {'pc': map_pc, 'timestamp' : map_timestamp}
+        T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
 
         return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data}
-    
-    def visualize_pointclouds(self, loc_pc, map_pc, T_ml):
-        print(loc_pc.shape)
-        print(map_pc.shape)
-        plt.figure(figsize=(15,15))
-        plt.scatter(loc_pc[:,0], loc_pc[:,1], s=0.5, c='green')
-        plt.savefig('loc_vis.png')
-
-        plt.figure(figsize=(15,15))
-        plt.scatter(map_pc[:,0], map_pc[:,1], s=0.5, c='red')
-        plt.savefig('map_vis.png')
-
-        loc_pc[:, 0:3] = np.matmul(T_ml[:3, :3], loc_pc[:, 0:3].T).T + T_ml[:3, 3]
-        
-        plt.figure(figsize=(15,15))
-        plt.scatter(loc_pc[:,0], loc_pc[:,1], s=0.5, c='blue')
-        plt.scatter(map_pc[:,0], map_pc[:,1], s=0.5, c='red')
-        plt.savefig('loc_align_vis.png')
-
-    def visualize_pointcloud_old(self, pc, pc_color, ref_pc=None):
-        # Save x and y coordinates of pointcloud to image
-        # pc: (N, 3) array of pointcloud 
-        # Returns: (H, W, 3) array of image with color values at x and y coordinates of pointcloud
-        H = 1000
-        W = 1000
-        img = np.zeros((H, W, 3))
-        # Map pointcloud to image bounds
-        buffer = 125
-        #max_x = np.max(pc[:, 0]) - buffer
-        #min_x = np.min(pc[:, 0]) + buffer
-        #max_y = np.max(pc[:, 1]) - buffer
-        #min_y = np.min(pc[:, 1]) + buffer
-
-        #pc[:, 0] = (pc[:, 0] - min_x) / (max_x - min_x) * W
-        #pc[:, 1] = (pc[:, 1] - min_y) / (max_y - min_y) * H
-
-        for i in range(pc.shape[0]):
-            x = int(pc[i, 0])
-            y = int(pc[i, 1])
-            if x < 0 or x >= W or y < 0 or y >= H:
-                continue
-            # To improve visibility, plot x,y coordinate and the 4 surrounding pixels
-            if pc_color == "green":
-                img[y-1:y+1, x-1:x+1] = [0, 255, 0]
-            elif pc_color == "blue":
-                # Assign an azure blue colour
-                img[y-1:y+1, x-1:x+1] = [255, 255, 0]
-            elif pc_color == "red":
-                img[y-1:y+1, x-1:x+1] = [0, 0, 255]
-        
-        # Rotate image 90 degrees counter-clockwise
-        #img = np.rot90(img, 3)
-
-        return img
