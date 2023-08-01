@@ -174,6 +174,7 @@ def extract_weights(mask, scan_pc):
     scan_x_0 = scan_pc[:,:,0] == 0.0
     scan_y_0 = scan_pc[:,:,1] == 0.0
     fake_scan_idx = scan_x_0 * scan_y_0
+
     grid_pc[fake_scan_idx] = -100.0 * torch.ones(2, dtype=grid_pc.dtype, device=grid_pc.device)
 
     # Finally, unsqueeze the grid_pc to give vector x 1 shape as output from grid_sample
@@ -184,11 +185,12 @@ def extract_weights(mask, scan_pc):
     
     # Compute stats
     mean_num_non0 = (torch.sum(weights > 0.0)/weights.shape[0]).detach().cpu().numpy()
+
     mean_w = torch.mean(weights).detach().cpu().numpy()
     max_w = torch.max(weights).detach().cpu().numpy()
     min_w = torch.min(weights[~fake_scan_idx]).detach().cpu().numpy()
     # Compute number of non 0 weights in a differentiable way for backprop
-    diff_mean_num_non0 = torch.sum(0.5 * torch.tanh(weights) + 0.5)
+    diff_mean_num_non0 = torch.sum(0.5 * torch.tanh(5*weights[~fake_scan_idx]) + 0.5) / weights.shape[0]
 
     return weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w
 

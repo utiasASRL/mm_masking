@@ -204,7 +204,11 @@ class LearnICPWeightPolicy(nn.Module):
         self.max_w = max_w
         self.min_w = min_w
         self.mean_w = mean_w
-        self.mean_all_pts = torch.sum(scan_pc[:,:,0] > 0.0) / scan_pc.shape[0]
+
+        non0_x = scan_pc[:,:,0] != 0.0
+        non0_y = scan_pc[:,:,1] != 0.0
+        non0_pts = non0_x * non0_y
+        self.mean_all_pts = torch.sum(non0_pts) / scan_pc.shape[0]
 
         del fft_data, fft_cfar, fft_weights, output_data
         torch.cuda.empty_cache()

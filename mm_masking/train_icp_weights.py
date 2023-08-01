@@ -220,11 +220,15 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         # Compute loss associated with number of points
         # This penalizes the network for ignoring too many points from those available
         if loss_weights['num_pts'] > 0.0:
-            loss_num_pts = torch.abs(num_non0 - model.mean_all_pts)
+            loss_num_pts = model.mean_all_pts - num_non0
 
     loss = loss_weights['icp']*loss_icp + loss_weights['fft']*loss_fft + \
         loss_weights['mask_pts']*loss_mask_pts + loss_weights['cfar']*loss_cfar + \
         loss_weights['num_pts']*loss_num_pts
+
+    print("Loss: ", loss.item(), " ICP: ", loss_weights['icp']*loss_icp, " FFT: ", loss_weights['fft']*loss_fft, \
+        " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
+        " Num pts: ", loss_weights['num_pts']*loss_num_pts)
 
     return loss
 
@@ -314,8 +318,8 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": -1,
-        "num_test": 128,
+        "num_train": 1,
+        "num_test": 1,
         "random": False,
         "float_type": torch.float64,
         "use_gt": False,
@@ -329,13 +333,13 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 16,
+        "batch_size": 1,
         "shuffle": True,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 5*1e-5,
+        "learning_rate": 1e-3,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.01,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -344,11 +348,11 @@ def main(args):
         "a_thresh": 0.7, # Threshold for CFAR
         "b_thresh": 0.09, # Threshold for CFAR
         # Choose weights for loss function
-        "loss_icp_weight": 0.2, # Weight for icp loss
+        "loss_icp_weight": 1.0, # Weight for icp loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 1.0, # Weight for cfar mask loss
-        "num_pts_weight": 0.0, # Weight for number of points loss
+        "loss_cfar_mask_weight": 0.5, # Weight for cfar mask loss
+        "num_pts_weight": 0.001, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
         "max_iter": 8, # Maximum number of iterations for icp
