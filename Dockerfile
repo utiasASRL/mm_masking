@@ -1,7 +1,5 @@
 #FROM ubuntu:22.04
-FROM nvidia/cuda:11.6.0-cudnn8-devel-ubuntu20.04
-
-CMD ["/bin/bash"]
+FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu20.04
 
 ARG GROUPID=0
 ARG USERID=0
@@ -70,20 +68,22 @@ RUN apt update && apt install -q -y vim
 RUN apt install python3.8-venv
 
 # Install miniconda
-#ENV CONDA_DIR /opt/conda
-#RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
-#    /bin/bash ~/miniconda.sh -b -p /opt/conda
+ENV CONDA_DIR /opt/conda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+    /bin/bash ~/miniconda.sh -b -p /opt/conda
+ENV PATH=$CONDA_DIR/bin:$PATH
 
-# Set the PATH environment variable
-#ENV PATH /opt/conda/bin:$PATH
+# Create conda environment
+COPY environment.yml .
+COPY external/ external/
+RUN conda env create -f environment.yml
 
-# Copy the environment.yml file to the container
-#COPY environment.yml /root/environment.yml
-#RUN conda env create -f /root/environment.yml
-#ENV PATH /opt/conda/envs/mmm_env/bin:$PATH
-#RUN conda init bash
-# Change ownership of the environment directory to the current user
-#RUN chown -R ${USERID}:${GROUPID} /opt/conda/envs/mmm_env
+COPY ./entrypoint.sh ./entrypoint.sh
+RUN chmod +x entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 ## Switch to specified user
 USER ${USERID}:${GROUPID}
+
+
+

@@ -22,3 +22,6 @@ results/
 
 #
 .vscode/
+
+# Neptune
+*.neptune

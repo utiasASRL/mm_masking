@@ -1,8 +1,8 @@
 import numpy as np
 import torch
-from scipy.signal import find_peaks
-from dICP.diff_nn import diff_nn
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 import torch.nn.functional as F
 import cv2
 import time
@@ -182,12 +182,13 @@ def extract_weights(mask, scan_pc):
     weights = F.grid_sample(mask_c, grid_pc, mode='bilinear', padding_mode='zeros', align_corners=True)
     # Squeeze out the extra dimensions
     weights = weights.squeeze(1).squeeze(-1)
-    
-    # Compute stats
-    mean_num_non0 = (torch.sum(weights > 0.0)/weights.shape[0]).detach().cpu().numpy()
 
-    mean_w = torch.mean(weights).detach().cpu().numpy()
-    max_w = torch.max(weights).detach().cpu().numpy()
+    # Compute stats
+    # Weights below 0.05 are considered non-impactful/0
+    mean_num_non0 = (torch.sum(weights[~fake_scan_idx] > 0.05)/weights.shape[0]).detach().cpu().numpy()
+
+    mean_w = torch.mean(weights[~fake_scan_idx]).detach().cpu().numpy()
+    max_w = torch.max(weights[~fake_scan_idx]).detach().cpu().numpy()
     min_w = torch.min(weights[~fake_scan_idx]).detach().cpu().numpy()
     # Compute number of non 0 weights in a differentiable way for backprop
     diff_mean_num_non0 = torch.sum(0.5 * torch.tanh(5*weights[~fake_scan_idx]) + 0.5) / weights.shape[0]

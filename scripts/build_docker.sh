@@ -5,3 +5,4 @@ docker build -t mm_masking \
   --build-arg GROUPID=$(id -g) \
   --build-arg USERNAME=$(whoami) \
   --build-arg HOMEDIR=${HOME} .
+cd $ROOTDIR

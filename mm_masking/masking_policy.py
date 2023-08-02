@@ -3,11 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.nn import ModuleList
-import cv2
-from torchvision import datasets, transforms
 from dICP.ICP import ICP
 from radar_utils import load_pc_from_file, cfar_mask, extract_pc, radar_polar_to_cartesian_diff, radar_cartesian_to_polar, radar_polar_to_cartesian
-from neptune.types import File
 
 import matplotlib.pyplot as plt
 

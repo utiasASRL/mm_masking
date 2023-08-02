@@ -3,7 +3,9 @@ import torch
 import numpy as np
 import os.path as osp
 from pyboreas.utils.odometry import read_traj_file2
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 from pylgmath import se3op, Transformation
 from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff
 from dICP.ICP import ICP

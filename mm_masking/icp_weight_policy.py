@@ -3,14 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.nn import ModuleList
-import cv2
-from torchvision import datasets, transforms
 from dICP.ICP import ICP
 from radar_utils import load_pc_from_file, cfar_mask, extract_pc, radar_polar_to_cartesian_diff, radar_cartesian_to_polar, radar_polar_to_cartesian, extract_weights, point_to_cart_idx
 from neptune.types import File
 import time
 
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -221,10 +221,8 @@ class LearnICPWeightPolicy(nn.Module):
             scan_pc_0 = scan_pc[0].detach().cpu().numpy()
             # Only use scan_pc_0 points that aren't exactly 0
             scan_w_0 = weights[0].detach().cpu().numpy()
-            scan_w_0 += 0.001
-            scan_w_0[scan_w_0 > 1.0] = 1.0
-            scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.01]
-            scan_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) > 0.01]
+            scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
+            scan_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) > 0.05]
 
             # Also isolate the points for which weight is above 0.01
             scan_pc_0_used = scan_pc_0[scan_w_0 > 0.01]
@@ -242,14 +240,13 @@ class LearnICPWeightPolicy(nn.Module):
 
             fig, ax = plt.subplots()
             ax.set_facecolor('black')
-            sc = ax.scatter(scan_pc_0_used[:, 0], scan_pc_0_used[:, 1], c=scan_w_0_used, clim=(0.01, 1.0), cmap='spring', s=0.5)
-            ax.scatter(scan_pc_0_w0[:, 0], scan_pc_0_w0[:, 1], c='grey', s=0.5)
+            sc = ax.scatter(scan_pc_0_used[:, 0], scan_pc_0_used[:, 1], c=scan_w_0_used, clim=(0.00, 1.0), cmap='spring', s=0.5)
+            ax.scatter(scan_pc_0_w0[:, 0], scan_pc_0_w0[:, 1], c=0.5+scan_w_0_w0, clim=(0.0, 1.0), cmap='binary', s=0.5)
             cbar = plt.colorbar(sc, label='Weights')
             plt.xlabel('x (m)')
             plt.ylabel('y (m)')
             plt.title("Weighted Scan")
             neptune_run["weighted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
-            #plt.savefig("weighted_pc.png")
             plt.close(fig)
 
         # Pass the modified fft_data through ICP

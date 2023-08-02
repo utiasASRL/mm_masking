@@ -5,7 +5,9 @@ from torch.utils.data import Dataset, DataLoader
 from icp_weight_policy import LearnICPWeightPolicy
 import time
 import pickle
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 import numpy as np
 from pylgmath import se3op
 import os
@@ -323,8 +325,8 @@ def main(args):
         "random": False,
         "float_type": torch.float64,
         "use_gt": False,
-        "pos_std": 1.5,             # Standard deviation of position initial guess
-        "rot_std": 0.2,             # Standard deviation of rotation initial guess
+        "pos_std": 2.0,             # Standard deviation of position initial guess
+        "rot_std": 0.3,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
         "map_sensor": "radar",
         "loc_sensor": "radar",
@@ -334,25 +336,25 @@ def main(args):
 
         # Iterator params
         "batch_size": 1,
-        "shuffle": True,
+        "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 1000,
+        "num_epochs": 500,
         "learning_rate": 1e-3,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.01,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
         "init_weights": True, # True or false for manually initializing weights
         "clip_value": 0.0, # Value to clip gradients at, set 0 for no clipping
-        "a_thresh": 0.7, # Threshold for CFAR
+        "a_thresh": 1.0, # Threshold for CFAR
         "b_thresh": 0.09, # Threshold for CFAR
         # Choose weights for loss function
         "loss_icp_weight": 1.0, # Weight for icp loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.5, # Weight for cfar mask loss
-        "num_pts_weight": 0.001, # Weight for number of points loss
+        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
+        "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
         "max_iter": 8, # Maximum number of iterations for icp
@@ -362,6 +364,8 @@ def main(args):
         "network_output": "cartesian", # Options are "cartesian" and "polar"
         "binary_inference": False, # Options are True and False, whether the mask is binary or not during inference
     }
+
+    print("Using device: ", params['device'])
     torch.set_default_dtype(params["float_type"])
 
     loss_weights = {"icp": params["loss_icp_weight"], "fft": params["loss_fft_mask_weight"],
