@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch.nn import ModuleList
 from dICP.ICP import ICP
-from radar_utils import load_pc_from_file, cfar_mask, extract_pc, radar_polar_to_cartesian_diff, radar_cartesian_to_polar, radar_polar_to_cartesian, extract_weights, point_to_cart_idx
+from radar_utils import load_pc_from_file, cfar_mask, extract_pc, radar_polar_to_cartesian_diff, radar_cartesian_to_polar, radar_polar_to_cartesian, extract_weights, point_to_cart_idx, form_cart_range_angle_grid, form_polar_range_grid
 from neptune.types import File
 import time
 
@@ -22,18 +22,29 @@ def weights_init(m):
             print("Skipping initialization of ", classname)
 
 class LearnICPWeightPolicy(nn.Module):
-    def __init__(self, icp_type='pt2pl', network_input='cartesian', 
-                 network_output='cartesian', leaky=False, dropout=0.0, batch_norm=False,
+    def __init__(self, icp_type='pt2pl', network_inputs={'fft': True, 'cfar': True, 'range': True},
+                 network_input_type='cartesian', 
+                 network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
                  float_type=torch.float64, device='cpu', init_weights=True,
                  normalize_type='none', log_transform=False, fft_mean=0.0, fft_std=1.0, fft_min=0.0, fft_max=1.0,
                  a_threshold=0.7, b_threshold=0.09, icp_weight=1.0, gt_eye=True, max_iter=25):
         super().__init__()
+
+        # Define constant params (need to move to config file)
+        self.res = 0.0596   # This is the old resolution!
+
         config_path = '../external/dICP/config/dICP_config.yaml'
         self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
         self.float_type = float_type
         self.device = device
-        self.network_input = network_input
-        self.network_output = network_output
+        self.network_inputs = network_inputs
+        if network_input_type == 'cartesian':
+            self.range_mask, _ = form_cart_range_angle_grid(dtype=float_type, device=device)
+        elif network_input_type == 'polar':
+            self.range_mask = form_polar_range_grid(polar_resolution=self.res, dtype=float_type, device=device)
+        
+        self.network_input_type = network_input_type
+        self.network_output_type = network_output_type
         self.leaky = leaky
         self.dropout = dropout
         self.batch_norm = batch_norm
@@ -57,23 +68,20 @@ class LearnICPWeightPolicy(nn.Module):
         self.fft_min = fft_min
         self.fft_max = fft_max
 
-        # Define constant params (need to move to config file)
-        self.res = 0.0596   # This is the old resolution!
-
-        channels = [1, 8, 16, 32, 64, 128, 256]
-
-        self.channels = channels
+        init_c_num = network_inputs['fft'] + network_inputs['cfar'] + network_inputs['range']
+        enc_channels = [init_c_num, 8, 16, 32, 64, 128, 256]
+        dec_channels = [256, 128, 64, 32, 16, 8]
 
         self.encoder = ModuleList(
-			[self.conv_block(channels[i], channels[i + 1], i)
-			 	for i in range(len(channels) - 1)])
+			[self.conv_block(enc_channels[i], enc_channels[i + 1], i)
+			 	for i in range(len(enc_channels) - 1)])
 
         self.decoder = ModuleList(
-            [self.conv_block(channels[i+1], channels[i])
-                for i in reversed(range(1,len(channels) - 1))])
+            [self.conv_block(dec_channels[i], dec_channels[i + 1])
+                for i in range(len(dec_channels) - 1)])
 
         self.final_layer = nn.Sequential(
-            nn.Conv2d(channels[1], channels[0], kernel_size=1),
+            nn.Conv2d(dec_channels[-1], 1, kernel_size=1),
             nn.Sigmoid()
         )
 
@@ -120,20 +128,29 @@ class LearnICPWeightPolicy(nn.Module):
 
         if override_mask is None:
             # Convert input data to desired network input
-            if self.network_input == 'polar':
-                input_data = fft_data
-            elif self.network_input == 'cartesian':
-                input_data = radar_polar_to_cartesian_diff(fft_data, azimuths, self.res)
-            
+            if self.network_input_type == 'polar':
+                input_data = fft_data.unsqueeze(1)
+            elif self.network_input_type == 'cartesian':
+                input_data = radar_polar_to_cartesian_diff(fft_data, azimuths, self.res).unsqueeze(1)
+            if self.network_inputs['cfar']:
+                if self.network_input_type == 'cartesian':
+                    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.res)
+                input_data = torch.cat([input_data, fft_cfar.unsqueeze(1)], dim=1)
+            if self.network_inputs['range']:
+                range_stack = torch.stack([self.range_mask for i in range(input_data.shape[0])], dim=0).unsqueeze(1)
+                input_data = torch.cat([input_data, range_stack], dim=1)
+
             if self.log_transform:
                 input_data = torch.log(input_data + 1e-6)
             if self.normalize_type == "minmax":
-                input_data = (input_data - self.fft_min) / (self.fft_max - self.fft_min)
+                for c in range(input_data.shape[1]):
+                    c_max = torch.max(input_data[:,c,:,:])
+                    c_min = torch.min(input_data[:,c,:,:])
+                    input_data[:,c,:,:] = (input_data[:,c,:,:] - c_min) / (c_max - c_min)
             elif self.normalize_type == "standardize":
                 input_data = input_data - self.fft_mean
                 input_data = input_data / self.fft_std
 
-            input_data = input_data.unsqueeze(1)
             # Encoder
             enc_layers = []
             for i, layer in enumerate(self.encoder):
@@ -164,34 +181,34 @@ class LearnICPWeightPolicy(nn.Module):
         else:
             mask = override_mask
             # Make sure override mask matches self.network_input
-            if mask.shape == fft_data.shape and self.network_input == 'cartesian':
+            if mask.shape == fft_data.shape and self.network_input_type == 'cartesian':
                 mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
-            elif mask.shape != fft_data.shape and self.network_input == 'polar':
+            elif mask.shape != fft_data.shape and self.network_input_type == 'polar':
                 mask = radar_cartesian_to_polar(mask, azimuths, self.res)
 
         if binary:
             mask = torch.where(mask > 0.5, 1.0, 0.0)
 
         # This needs to be cleaned up
-        if self.network_input == 'polar':
+        if self.network_input_type == 'polar':
             # If polar input, original output mask is polar
             # Apply mask to desired output form
-            if self.network_output == 'polar':
+            if self.network_output_type == 'polar':
                 output_data = fft_weights * mask
 
-            elif self.network_output == 'cartesian':
+            elif self.network_output_type == 'cartesian':
                 mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
                 bev_data = radar_polar_to_cartesian_diff(fft_weights, azimuths, self.res)
                 output_data = bev_data * mask
 
-        elif self.network_input == 'cartesian':
+        elif self.network_input_type == 'cartesian':
             # If cartesian input, original output mask is cartesian
             # Apply mask to desired output form
-            if self.network_output == 'polar':
+            if self.network_output_type == 'polar':
                 mask = radar_cartesian_to_polar(mask, azimuths, self.res)
                 output_data = fft_weights * mask
             
-            elif self.network_output == 'cartesian':
+            elif self.network_output_type == 'cartesian':
                 bev_data = radar_polar_to_cartesian_diff(fft_weights, azimuths, self.res)
                 output_data = bev_data * mask
 

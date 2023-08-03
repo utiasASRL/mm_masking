@@ -122,7 +122,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
             if neptune_run is not None and epoch is not None:
-                if model.network_output == 'polar':
+                if model.network_output_type == 'polar':
                     mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
                     mask_0 = mask_cart[0].numpy()
                 else:
@@ -201,7 +201,7 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
             mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
             fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
 
-            if model.network_input == "cartesian":
+            if model.network_output_type == "cartesian":
                 azimuths = batch_scan['azimuths'].to(mask.device)
                 fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
 
@@ -209,10 +209,10 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         # Compute CFAR mask loss
         if loss_weights['cfar'] > 0.0:
             fft_cfar = batch_scan['fft_cfar'].to(mask.device)
-            if model.network_input == "cartesian":
+            if model.network_output_type == "cartesian":
                 azimuths = batch_scan['azimuths'].to(mask.device)
                 fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, model.res)
-            
+
             loss_cfar = mask_criterion(mask, fft_cfar)
 
         # Compute mask pts loss
@@ -267,7 +267,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
             fft_data = batch_scan['fft_data'].to(device)
             if loss_weights['cfar'] > 0.0:
                 fft_cfar = batch_scan['fft_cfar'].to(device)
-                if model.network_input == "cartesian":
+                if model.network_input_type == "cartesian":
                     azimuths = batch_scan['azimuths'].to(device)
                     fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, model.res)
                 ones_mask = fft_cfar
@@ -277,7 +277,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
                 mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
                 fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
 
-                if model.network_input == "cartesian":
+                if model.network_input_type == "cartesian":
                     azimuths = batch_scan['azimuths'].to(device)
                     fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
                 ones_mask = fft_mask
@@ -320,10 +320,10 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 1,
-        "num_test": 1,
+        "num_train": 256,
+        "num_test": 64,
         "random": False,
-        "float_type": torch.float64,
+        "float_type": torch.float32,
         "use_gt": False,
         "pos_std": 2.0,             # Standard deviation of position initial guess
         "rot_std": 0.3,             # Standard deviation of rotation initial guess
@@ -331,17 +331,17 @@ def main(args):
         "map_sensor": "radar",
         "loc_sensor": "radar",
         "log_transform": False,      # True or false for log transform of fft data
-        "normalize": "none",  # Options are "minmax", "standardize", and none
+        "normalize": "minmax",  # Options are "minmax", "standardize", and none
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 1,
+        "batch_size": 16,
         "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 500,
-        "learning_rate": 1e-3,
+        "num_epochs": 1000,
+        "learning_rate": 1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.01,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -353,16 +353,20 @@ def main(args):
         "loss_icp_weight": 1.0, # Weight for icp loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
-        "num_pts_weight": 0.0, # Weight for number of points loss
+        "loss_cfar_mask_weight": 0.5, # Weight for cfar mask loss
+        "num_pts_weight": 0.001, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
         "max_iter": 8, # Maximum number of iterations for icp
 
         # Model setup
-        "network_input": "cartesian", # Options are "cartesian" and "polar", what the network takes in
-        "network_output": "cartesian", # Options are "cartesian" and "polar"
+        "network_input_type": "cartesian", # Options are "cartesian" and "polar", what the network takes in
+        "network_output_type": "cartesian", # Options are "cartesian" and "polar"
         "binary_inference": False, # Options are True and False, whether the mask is binary or not during inference
+        # Choose inputs to network
+        "fft_input": True,
+        "cfar_input": False,
+        "range_input": True,
     }
 
     print("Using device: ", params['device'])
@@ -371,6 +375,7 @@ def main(args):
     loss_weights = {"icp": params["loss_icp_weight"], "fft": params["loss_fft_mask_weight"],
                     "mask_pts": params["loss_fft_mask_weight"], "cfar": params["loss_cfar_mask_weight"],
                     "num_pts": params["num_pts_weight"]}
+    network_inputs = {"fft": params["fft_input"], "cfar": params["cfar_input"], "range": params["range_input"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
@@ -417,9 +422,9 @@ def main(args):
     print("Dataloader created")
 
     # Initialize policy
-    policy = LearnICPWeightPolicy(icp_type=params["icp_type"], 
-                             network_input=params["network_input"],
-                             network_output=params["network_output"],
+    policy = LearnICPWeightPolicy(icp_type=params["icp_type"], network_inputs=network_inputs,
+                             network_input_type=params["network_input_type"],
+                             network_output_type=params["network_output_type"],
                              leaky=params["leaky"], dropout=params["dropout"],
                              batch_norm=params["batch_norm"],
                              float_type=params["float_type"], device=params["device"],

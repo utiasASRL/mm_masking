@@ -303,23 +303,8 @@ def radar_polar_to_cartesian_diff(fft_data, azimuths, radar_resolution, cart_res
     Returns:
         np.ndarray: Cartesian radar power readings
     """
-    # Compute the range (m) captured by pixels in cartesian scan
-    # A pixels coordinates are the center of the pixel
-    # If even number of pixels, 0 m coordinate falls on edges of pixels (hence the -0.5)
-    # Otherwise, 0 m falls on the middle of a pixel and so form is simplified
-    if (cart_pixel_width % 2) == 0:
-        cart_min_range = (cart_pixel_width / 2 - 0.5) * cart_resolution
-    else:
-        cart_min_range = cart_pixel_width / 2 * cart_resolution
-    
-    # Compute the value of each cartesian pixel, centered at 0
-    coords = torch.linspace(-cart_min_range, cart_min_range, cart_pixel_width, dtype=fft_data.dtype, device=fft_data.device)
-    Y, X = torch.meshgrid(coords, -1 * coords, indexing='xy')
-
-    # Compute the range (m) and angle (radians) value of each cartesian pixel
-    sample_range = torch.sqrt(Y * Y + X * X)
-    sample_angle = torch.arctan2(Y, X)
-    sample_angle += torch.where(sample_angle < 0, 2. * torch.pi, 0.0) # wrap to 0-2pi
+    # Compute the range (m) and angle (rad) values for each cartesian pixel
+    sample_range, sample_angle = form_cart_range_angle_grid(cart_pixel_width=cart_pixel_width, dtype=fft_data.dtype, device=fft_data.device)
 
     # So far sample_range and sample_angle are the same for each item in batch
     # Now, expand them to match batch size
@@ -381,18 +366,12 @@ def radar_polar_to_cartesian_diff(fft_data, azimuths, radar_resolution, cart_res
     
     return remapped_data.squeeze(1)
 
-def radar_cartesian_to_polar(cart, azimuths, radar_resolution, cart_resolution=0.2384, polar_pixel_width=3360):
+def radar_cartesian_to_polar(cart, azimuths, radar_resolution, cart_resolution=0.2384, polar_pixel_shape=(400, 3360)):
     """Convert a cartesian radar scan to polar.
     """
     # Compute the range (m) captured by pixels in each azimuth
-    # A pixels coordinates are the center of the pixel
-    # Azimuths already contain known angles camputed in polar. Also means we don't need to deal with wobble
-    # Pixel 0 in range is 0 m, so range is
-    polar_range = (polar_pixel_width - 1) * radar_resolution
-
-    # Compute the range value of each polar pixel
-    # These values are the same for each batch item
-    range_coords = torch.linspace(0.0, polar_range, polar_pixel_width, dtype=torch.float64, device=cart.device)
+    range_grid = form_polar_range_grid(polar_resolution=radar_resolution, polar_pixel_shape=polar_pixel_shape, dtype=cart.dtype, device=cart.device)
+    range_coords = range_grid[0]
 
     # For each azimuth and range, what is the cartesian coordinate?
     # Project the range along each azimuth onto the cartesian coordinate system
@@ -447,4 +426,38 @@ def point_to_cart_idx(pc, cart_resolution=0.2384, cart_pixel_width=640, min_to_p
         grid_pc = grid_pc + cart_pixel_width / 2
 
     return grid_pc
+
+def form_cart_range_angle_grid(cart_resolution=0.2384, cart_pixel_width=640, dtype=torch.float64, device='cpu'):
+    # Compute the range (m) and angle (rad) value of each cartesian pixel
+    # A pixels coordinates are the center of the pixel
+    # If even number of pixels, 0 m coordinate falls on edges of pixels (hence the -0.5)
+    # Otherwise, 0 m falls on the middle of a pixel and so form is simplified
+    if (cart_pixel_width % 2) == 0:
+        cart_min_range = (cart_pixel_width / 2 - 0.5) * cart_resolution
+    else:
+        cart_min_range = cart_pixel_width / 2 * cart_resolution
     
+    # Compute the value of each cartesian pixel, centered at 0
+    coords = torch.linspace(-cart_min_range, cart_min_range, cart_pixel_width, dtype=dtype, device=device)
+    Y, X = torch.meshgrid(coords, -1 * coords, indexing='xy')
+    sample_range = torch.sqrt(Y * Y + X * X)
+    sample_angle = torch.arctan2(Y, X)
+    sample_angle += torch.where(sample_angle < 0, 2. * torch.pi, 0.0) # wrap to 0-2pi
+
+    return sample_range, sample_angle
+
+def form_polar_range_grid(polar_resolution=0.2384, polar_pixel_shape=(400, 3360), dtype=torch.float64, device='cpu'):
+    # Compute the range (m) captured by pixels in each azimuth
+    # A pixels coordinates are the center of the pixel
+    # Azimuths already contain known angles camputed in polar. Also means we don't need to deal with wobble
+    # Pixel 0 in range is 0 m, so range is
+    polar_range = (polar_pixel_shape[1] - 1) * polar_resolution
+
+    # Compute the range value of each polar pixel
+    # These values are the same for each batch item
+    range_coords = torch.linspace(0.0, polar_range, polar_pixel_shape[1], dtype=dtype, device=device)
+
+    # Return grid where each row is the range_coords
+    range_grid = range_coords.unsqueeze(0).expand(polar_pixel_shape[0], -1)
+
+    return range_grid

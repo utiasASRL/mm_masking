@@ -82,6 +82,10 @@ COPY ./entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
+# Install this for some potential cuda bugs
+RUN apt install nvidia-modprobe
+RUN apt update && apt install
+
 ## Switch to specified user
 USER ${USERID}:${GROUPID}
 
