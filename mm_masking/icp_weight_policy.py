@@ -142,14 +142,15 @@ class LearnICPWeightPolicy(nn.Module):
 
             if self.log_transform:
                 input_data = torch.log(input_data + 1e-6)
-            if self.normalize_type == "minmax":
-                for c in range(input_data.shape[1]):
+            for c in range(input_data.shape[1]):
+                if self.normalize_type == "minmax":
                     c_max = torch.max(input_data[:,c,:,:])
                     c_min = torch.min(input_data[:,c,:,:])
                     input_data[:,c,:,:] = (input_data[:,c,:,:] - c_min) / (c_max - c_min)
-            elif self.normalize_type == "standardize":
-                input_data = input_data - self.fft_mean
-                input_data = input_data / self.fft_std
+                elif self.normalize_type == "standardize":
+                    c_mean = torch.mean(input_data[:,c,:,:])
+                    c_std = torch.std(input_data[:,c,:,:])
+                    input_data[:,c,:,:] = (input_data[:,c,:,:] - c_mean) / c_std
 
             # Encoder
             enc_layers = []
