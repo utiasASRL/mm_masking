@@ -4,7 +4,7 @@ container_state=$(docker inspect -f '{{.State.Running}}' mm_masking 2>/dev/null)
 if [ "$container_state" = "true" ]
 then
 	echo 'Container already running, joining it now.'
-	docker exec -it mm_masking bash
+	docker exec -it mm_masking /entrypoint.sh
 else
 	echo 'New container run initialized.'
 	docker run -it --rm --name mm_masking \
