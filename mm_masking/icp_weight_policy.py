@@ -34,7 +34,8 @@ class LearnICPWeightPolicy(nn.Module):
         self.res = 0.0596   # This is the old resolution!
 
         config_path = '../external/dICP/config/dICP_config.yaml'
-        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
+        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-4)
+        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=500, tolerance=1e-4)
         self.float_type = float_type
         self.device = device
         self.network_inputs = network_inputs
@@ -278,7 +279,12 @@ class LearnICPWeightPolicy(nn.Module):
     def icp(self, scan_pc, map_pc, T_init, weights):
         loss_fn = {"name": "cauchy", "metric": 1.0}
         trim_dist = 5.0
-        _, T_ms = self.ICP_alg.icp(scan_pc, map_pc, 
-                                   T_init=T_init, weight=weights,
-                                   trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
+        if self.training:
+            _, T_ms = self.ICP_alg.icp(scan_pc, map_pc, 
+                                    T_init=T_init, weight=weights,
+                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
+        else:
+            _, T_ms = self.ICP_alg_inference.icp(scan_pc, map_pc, 
+                                    T_init=T_init, weight=weights,
+                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
         return T_ms

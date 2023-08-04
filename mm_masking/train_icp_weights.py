@@ -228,9 +228,9 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         loss_weights['mask_pts']*loss_mask_pts + loss_weights['cfar']*loss_cfar + \
         loss_weights['num_pts']*loss_num_pts
 
-    print("Loss: ", loss.item(), " ICP: ", loss_weights['icp']*loss_icp, " FFT: ", loss_weights['fft']*loss_fft, \
-        " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
-        " Num pts: ", loss_weights['num_pts']*loss_num_pts)
+    #print("Loss: ", loss.item(), " ICP: ", loss_weights['icp']*loss_icp, " FFT: ", loss_weights['fft']*loss_fft, \
+    #    " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
+    #    " Num pts: ", loss_weights['num_pts']*loss_num_pts)
 
     return loss
 
@@ -250,7 +250,12 @@ def eval_validation_loss(T_pred, batch_T_gt, gt_eye=True):
 def generate_baseline(model, iterator, baseline_type="train", device='cpu',
                       loss_weights={'icp': 1.0, 'fft': 0.0, 'mask_pts': 0.0, 'cfar': 0.0},
                       binary=False, gt_eye=True):
-    model.eval()
+    # We don't actually want to take steps, but want to see what the train baseline
+    # is without anything being turned off/without taking additional ICP steps
+    if baseline_type == "train":
+        model.train()
+    elif baseline_type == "val":
+        model.eval()
     loss_init_hist = []
     loss_ones_hist = []
 
@@ -313,18 +318,18 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="async"
+        mode="debug"
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 256,
-        "num_test": 64,
+        "num_train": 1,
+        "num_test": 1,
         "random": False,
         "float_type": torch.float32,
-        "use_gt": False,
+        "use_gt": True,
         "pos_std": 2.0,             # Standard deviation of position initial guess
         "rot_std": 0.3,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
@@ -335,13 +340,13 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 16,
+        "batch_size": 1,
         "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 1e-5,
+        "learning_rate": 5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.01,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -354,7 +359,7 @@ def main(args):
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
         "loss_cfar_mask_weight": 0.5, # Weight for cfar mask loss
-        "num_pts_weight": 0.001, # Weight for number of points loss
+        "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
         "max_iter": 8, # Maximum number of iterations for icp
@@ -366,7 +371,7 @@ def main(args):
         # Choose inputs to network
         "fft_input": True,
         "cfar_input": False,
-        "range_input": True,
+        "range_input": False,
     }
 
     print("Using device: ", params['device'])
