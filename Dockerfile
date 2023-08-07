@@ -74,7 +74,7 @@ ENV PATH=$CONDA_DIR/bin:$PATH
 # Create conda environment
 COPY external/ external/
 COPY environment.yml .
-RUN --mount=type=cache,target=/opt/conda/pkgs conda env create -f environment.yml
+RUN conda env create -f environment.yml
 
 # Set up entrypoint
 COPY ./entrypoint.sh ./entrypoint.sh
