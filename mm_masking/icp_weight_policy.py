@@ -26,7 +26,7 @@ class LearnICPWeightPolicy(nn.Module):
                  network_input_type='cartesian', 
                  network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
                  float_type=torch.float64, device='cpu', init_weights=True,
-                 normalize_type='none', log_transform=False, fft_mean=0.0, fft_std=1.0, fft_min=0.0, fft_max=1.0,
+                 normalize_type=[], log_transform=False, fft_mean=0.0, fft_std=1.0, fft_min=0.0, fft_max=1.0,
                  a_threshold=0.7, b_threshold=0.09, icp_weight=1.0, gt_eye=True, max_iter=25):
         super().__init__()
 
@@ -144,11 +144,11 @@ class LearnICPWeightPolicy(nn.Module):
             if self.log_transform:
                 input_data = torch.log(input_data + 1e-6)
             for c in range(input_data.shape[1]):
-                if self.normalize_type == "minmax":
+                if "minmax" in self.normalize_type:
                     c_max = torch.max(input_data[:,c,:,:])
                     c_min = torch.min(input_data[:,c,:,:])
                     input_data[:,c,:,:] = (input_data[:,c,:,:] - c_min) / (c_max - c_min)
-                elif self.normalize_type == "standardize":
+                elif "standardize" in self.normalize_type:
                     c_mean = torch.mean(input_data[:,c,:,:])
                     c_std = torch.std(input_data[:,c,:,:])
                     input_data[:,c,:,:] = (input_data[:,c,:,:] - c_mean) / c_std
@@ -280,11 +280,11 @@ class LearnICPWeightPolicy(nn.Module):
         loss_fn = {"name": "cauchy", "metric": 1.0}
         trim_dist = 5.0
         if self.training:
-            _, T_ms = self.ICP_alg.icp(scan_pc, map_pc, 
+            _, T_ms, _ = self.ICP_alg.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
                                     trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
         else:
-            _, T_ms = self.ICP_alg_inference.icp(scan_pc, map_pc, 
+            _, T_ms, _ = self.ICP_alg_inference.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
                                     trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
         return T_ms
