@@ -105,7 +105,7 @@ class ICPWeightDataset():
                         else:
                             T_init_idx = T_gt[idx]
                     else:
-                        xi_rand = torch.randn((6,1), dtype=float_type)
+                        xi_rand = torch.rand((6,1), dtype=float_type)
                         # Zero out z, pitch, and roll
                         xi_rand[2:5] = 0.0
                         # Scale x and y

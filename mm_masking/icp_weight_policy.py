@@ -27,7 +27,7 @@ class LearnICPWeightPolicy(nn.Module):
                  network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
                  float_type=torch.float64, device='cpu', init_weights=True,
                  normalize_type=[], log_transform=False, fft_mean=0.0, fft_std=1.0, fft_min=0.0, fft_max=1.0,
-                 a_threshold=0.7, b_threshold=0.09, icp_weight=1.0, gt_eye=True, max_iter=25):
+                 a_threshold=0.7, b_threshold=0.09, use_icp=True, gt_eye=True, max_iter=25):
         super().__init__()
 
         # Define constant params (need to move to config file)
@@ -53,7 +53,7 @@ class LearnICPWeightPolicy(nn.Module):
         self.log_transform = log_transform
         self.a_thres = a_threshold
         self.b_thres = b_threshold
-        self.icp_weight = icp_weight
+        self.use_icp = use_icp
         self.gt_eye = gt_eye
 
         # Parameters saving
@@ -269,7 +269,7 @@ class LearnICPWeightPolicy(nn.Module):
             plt.close(fig)
 
         # Pass the modified fft_data through ICP
-        if self.icp_weight > 0.0:
+        if self.use_icp > 0.0:
             T_est = self.icp(scan_pc, map_pc, T_init, weights)
         else:
             T_est = T_init
