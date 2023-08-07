@@ -1,26 +1,12 @@
 #FROM ubuntu:22.04
 FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu20.04
 
-ARG GROUPID=0
-ARG USERID=0
-ARG USERNAME=root
-ARG HOMEDIR=/root
-
-RUN if [ ${GROUPID} -ne 0 ]; then addgroup --gid ${GROUPID} ${USERNAME}; fi \
-  && if [ ${USERID} -ne 0 ]; then adduser --disabled-password --gecos '' --uid ${USERID} --gid ${GROUPID} ${USERNAME}; fi
-
 # Default number of threads for make build
 ARG NUMPROC=12
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-## Switch to specified user to create directories
-USER ${USERID}:${GROUPID}
-
 ENV ROOTDIR=$(pwd)
-
-## Switch to root to install dependencies
-USER 0:0
 
 ## Dependencies
 RUN apt update && apt upgrade -q -y
@@ -65,7 +51,9 @@ RUN apt update && apt install -q -y \
 # Install vim
 RUN apt update && apt install -q -y vim
 
-RUN apt install python3.8-venv
+# Install this for some potential cuda bugs
+RUN apt install nvidia-modprobe
+RUN apt update && apt install
 
 # Install miniconda
 ENV CONDA_DIR /opt/conda
@@ -74,20 +62,11 @@ RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86
 ENV PATH=$CONDA_DIR/bin:$PATH
 
 # Create conda environment
-COPY environment.yml .
 COPY external/ external/
-RUN conda env create -f environment.yml
+COPY environment.yml .
+RUN --mount=type=cache,target=/opt/conda/pkgs conda env create -f environment.yml
 
+# Set up entrypoint
 COPY ./entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Install this for some potential cuda bugs
-RUN apt install nvidia-modprobe
-RUN apt update && apt install
-
-## Switch to specified user
-USER ${USERID}:${GROUPID}
-
-
-
