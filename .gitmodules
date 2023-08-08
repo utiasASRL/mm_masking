@@ -7,3 +7,6 @@
 [submodule "external/dICP"]
 	path = external/dICP
 	url = git@github.com:lisusdaniil/dICP.git
+[submodule "external/vtr3"]
+	path = external/vtr3
+	url = git@github.com:utiasASRL/vtr3.git
