@@ -10,3 +10,9 @@
 [submodule "external/vtr3"]
 	path = external/vtr3
 	url = git@github.com:utiasASRL/vtr3.git
+[submodule "external/vtr_testing_radar"]
+	path = external/vtr_testing_radar
+	url = git@github.com:cheneyuwu/vtr_testing_radar.git
+[submodule "external/vtr3_python"]
+	path = external/vtr3_python
+	url = git@github.com:a-krawciw/vtr3_python.git
