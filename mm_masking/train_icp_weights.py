@@ -354,7 +354,7 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="async"
+        mode="debug"
     )
 
     params = {
@@ -384,7 +384,7 @@ def main(args):
         "num_epochs": 1000,
         "learning_rate": 5*1e-5,
         "leaky": False,   # True or false for leaky relu
-        "dropout": 0.01,   # Dropout rate, set 0 for no dropout
+        "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
         "init_weights": True, # True or false for manually initializing weights
         "clip_value": 0.0, # Value to clip gradients at, set 0 for no clipping
@@ -429,7 +429,8 @@ def main(args):
                                         pc_dir=args.pc_dir,
                                         radar_dir=args.radar_dir,
                                         loc_pairs=train_loc_pairs,
-                                        sensor=params["map_sensor"],
+                                        map_sensor=params["map_sensor"],
+                                        loc_sensor=params["loc_sensor"],
                                         random=params["random"],
                                         num_samples=params["num_train"],
                                         float_type=params["float_type"],
@@ -443,7 +444,8 @@ def main(args):
                                         pc_dir=args.pc_dir,
                                         radar_dir=args.radar_dir,
                                         loc_pairs=val_loc_pairs,
-                                        sensor=params["map_sensor"],
+                                        map_sensor=params["map_sensor"],
+                                        loc_sensor=params["loc_sensor"],
                                         random=params["random"],
                                         num_samples=params["num_test"],
                                         float_type=params["float_type"],
