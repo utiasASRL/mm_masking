@@ -144,11 +144,10 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
                     mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
                     fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
                     bev_data = radar_polar_to_cartesian_diff(fft_data, batch_scan['azimuths'], model.res)
-                    bev_cfar_data = radar_polar_to_cartesian_diff(cfar_data, batch_scan['azimuths'], model.res)
                     bev_fft_mask_data = radar_polar_to_cartesian_diff(fft_mask, batch_scan['azimuths'], model.res)
                     scan_0 = fft_data[0].numpy()
                     bev_scan_0 = bev_data[0].numpy()
-                    bev_cfar_0 = bev_cfar_data[0].numpy()
+                    cfar_data_0 = cfar_data[0].numpy()
                     bev_fft_mask_0 = bev_fft_mask_data[0].numpy()
 
                     fig = plt.figure()
@@ -164,7 +163,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
                     plt.close()
 
                     fig = plt.figure()
-                    plt.imshow(bev_cfar_0, cmap='gray')
+                    plt.imshow(cfar_data_0, cmap='gray')
                     plt.colorbar(location='top', shrink=0.5)
                     neptune_run["raw_scan"].append(fig, name=("CFAR Mask 0, batch " + str(i_batch)))
                     plt.close()
@@ -221,12 +220,9 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
 
             loss_fft = mask_criterion(mask, fft_mask)
         # Compute CFAR mask loss
+        # CFAR image is loaded in polar or cartesian already
         if loss_weights['cfar'] > 0.0:
             fft_cfar = batch_scan['fft_cfar'].to(mask.device)
-            if model.network_output_type == "cartesian":
-                azimuths = batch_scan['azimuths'].to(mask.device)
-                fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, model.res)
-
             loss_cfar = mask_criterion(mask, fft_cfar)
 
         # Compute mask pts loss
@@ -304,10 +300,8 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
             # Form baseline masks
             fft_data = batch_scan['fft_data'].to(device)
             if loss_weights['cfar'] > 0.0:
+                # CFAR image is loaded in polar or cartesian already
                 fft_cfar = batch_scan['fft_cfar'].to(device)
-                if model.network_input_type == "cartesian":
-                    azimuths = batch_scan['azimuths'].to(device)
-                    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, model.res)
                 ones_mask = fft_cfar
             elif loss_weights['fft'] > 0.0:
                 # Find mean value of each fft azimuth
@@ -354,35 +348,35 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="debug"
+        mode="async"
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 8,
-        "num_test": 8,
+        "num_train": 1,
+        "num_test": 1,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
         "pos_std": 2.0,             # Standard deviation of position initial guess
         "rot_std": 0.3,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
-        "map_sensor": "radar",
+        "map_sensor": "lidar",
         "loc_sensor": "radar",
         "log_transform": False,      # True or false for log transform of fft data
         "normalize": ["minmax"],  # Options are "minmax", "standardize", and none
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 4,
+        "batch_size": 1,
         "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 5*1e-5,
+        "learning_rate": 1e-3,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -396,7 +390,7 @@ def main(args):
         "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.5, # Weight for cfar mask loss
+        "loss_cfar_mask_weight": 0.1, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
@@ -423,6 +417,7 @@ def main(args):
 
     # Load in all ground truth data based on the localization pairs provided in 
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
+    #train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-02-09-12-55"]]
     val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
 
     train_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
@@ -478,10 +473,6 @@ def main(args):
                              init_weights=params["init_weights"],
                              normalize_type=params["normalize"],
                              log_transform=params["log_transform"],
-                             fft_mean=train_dataset.fft_mean,
-                             fft_std=train_dataset.fft_std,
-                             fft_max=train_dataset.fft_max,
-                             fft_min=train_dataset.fft_min,
                              a_threshold=params["a_thresh"],
                              b_threshold=params["b_thresh"],
                              use_icp=use_icp,

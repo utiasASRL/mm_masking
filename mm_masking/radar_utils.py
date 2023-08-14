@@ -20,13 +20,12 @@ def load_pc_from_file(file_path, to_type=torch.float64, to_device='cpu', flip_y=
     pc = pc.type(to_type)
     return pc
 
-def load_radar(raw_data):
+def load_radar(raw_img):
+    raw_data = np.asarray(raw_img)
     time_convert = 1000
     encoder_conversion = 2 * np.pi / 5600
-    N = raw_data.shape[0]
     timestamps = np.frombuffer(raw_data[:,:8].tobytes(), dtype=np.int64) * time_convert
     azimuths = np.frombuffer(raw_data[:,8:10].tobytes(), dtype=np.uint16) * encoder_conversion
-    range_bins = raw_data.shape[1] - 11
     fft_data = np.divide(raw_data[:,11:], 255.0, dtype=np.float32)
     return fft_data, azimuths, timestamps
 

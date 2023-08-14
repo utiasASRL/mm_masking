@@ -35,31 +35,19 @@ def convert_points_to_frame(pts: np.ndarray, frame: Transformation):
     new_points = (frame.matrix() @ new_points)
     return new_points[:3, :]
 
-def extract_points_and_map(graph: Graph, v: Vertex, msg="raw_point_cloud"):
-    curr_pts, curr_norms, = extract_points_from_vertex(v, msg=msg, T_zero=True)
+def extract_points_and_map(graph: Graph, v: Vertex, msg_prefix=''):
+    raw_msg = msg_prefix + 'raw_point_cloud'
+    curr_raw_pts, _, = extract_points_from_vertex(v, msg=raw_msg, T_zero=True)
+    filtered_msg = msg_prefix + 'filtered_point_cloud'
+    curr_filtered_pts, _, = extract_points_from_vertex(v, msg=filtered_msg, T_zero=True)
 
     teach_v = g_utils.get_closest_teach_vertex(v)
     map_ptr = teach_v.get_data("pointmap_ptr")
     teach_v = graph.get_vertex(map_ptr.map_vid)
     map_pts, maps_norms = extract_points_from_vertex(teach_v, msg="pointmap", T_zero=False)
-    
-    """
-    plt.figure(figsize=(15,15))
-    plt.scatter(map_pts.T[:,0], map_pts.T[:,1], s=0.5, c='blue')
 
-    print(map_pts.shape)
+    # Extract timestamps
+    loc_stamp = int(v.stamp * 1e-3)
+    map_stamp = int(teach_v.stamp * 1e-3)
 
-    map_pts, maps_norms = extract_points_from_vertex(teach_v, msg="filtered_point_cloud")
-
-    plt.scatter(map_pts.T[:,0], map_pts.T[:,1], s=0.5, c='red')
-    plt.savefig('test.png')
-    print(map_pts.shape)
-    adfsfdsa
-
-    #curr_pts = convert_points_to_frame(curr_pts, v.T_w_v)
-    #curr_norms = convert_points_to_frame(curr_norms, v.T_w_v)
-    #map_pts = convert_points_to_frame(map_pts, teach_v.T_w_v)
-    #maps_norms = convert_points_to_frame(maps_norms, teach_v.T_w_v)
-    """
-
-    return curr_pts.T, curr_norms.T, map_pts.T, maps_norms.T, v.T_w_v.matrix(), teach_v.T_w_v.matrix()
+    return curr_raw_pts.T, curr_filtered_pts.T, map_pts.T, maps_norms.T, loc_stamp, map_stamp

@@ -26,7 +26,7 @@ class LearnICPWeightPolicy(nn.Module):
                  network_input_type='cartesian', 
                  network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
                  float_type=torch.float64, device='cpu', init_weights=True,
-                 normalize_type=[], log_transform=False, fft_mean=0.0, fft_std=1.0, fft_min=0.0, fft_max=1.0,
+                 normalize_type=[], log_transform=False,
                  a_threshold=0.7, b_threshold=0.09, use_icp=True, gt_eye=True, max_iter=25):
         super().__init__()
 
@@ -63,12 +63,7 @@ class LearnICPWeightPolicy(nn.Module):
         self.mean_w = 0.0
         self.mean_all_pts = 0.0
 
-        # Load in normalization params
-        self.fft_mean = fft_mean
-        self.fft_std = fft_std
-        self.fft_min = fft_min
-        self.fft_max = fft_max
-
+        # Define network
         init_c_num = network_inputs['fft'] + network_inputs['cfar'] + network_inputs['range']
         enc_channels = [init_c_num, 8, 16, 32, 64, 128, 256]
         dec_channels = [256, 128, 64, 32, 16, 8]
@@ -119,7 +114,7 @@ class LearnICPWeightPolicy(nn.Module):
         azimuths = batch_scan['azimuths'].to(self.device)
         #az_timestamps = batch_scan['az_timestamps'].to(self.device)
         fft_cfar = batch_scan['fft_cfar'].to(self.device)
-        scan_pc = batch_scan['pc'].to(self.device)
+        scan_pc_raw = batch_scan['raw_pc'].to(self.device)
         #map_pc_paths = batch_map['pc_path']
         map_pc = batch_map['pc'].to(self.device)
 
@@ -128,14 +123,15 @@ class LearnICPWeightPolicy(nn.Module):
         fft_weights = torch.where(fft_cfar > 0.0, 1.0, 0.0)
 
         if override_mask is None:
+            input_data = None
             # Convert input data to desired network input
-            if self.network_input_type == 'polar':
-                input_data = fft_data.unsqueeze(1)
-            elif self.network_input_type == 'cartesian':
-                input_data = radar_polar_to_cartesian_diff(fft_data, azimuths, self.res).unsqueeze(1)
+            if self.network_inputs['fft']:
+                if self.network_input_type == 'polar':
+                    input_data = fft_data.unsqueeze(1)
+                elif self.network_input_type == 'cartesian':
+                    input_data = radar_polar_to_cartesian_diff(fft_data, azimuths, self.res).unsqueeze(1)
             if self.network_inputs['cfar']:
-                if self.network_input_type == 'cartesian':
-                    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.res)
+                # CFAR image is already in polar or cartesian
                 input_data = torch.cat([input_data, fft_cfar.unsqueeze(1)], dim=1)
             if self.network_inputs['range']:
                 range_stack = torch.stack([self.range_mask for i in range(input_data.shape[0])], dim=0).unsqueeze(1)
@@ -191,32 +187,8 @@ class LearnICPWeightPolicy(nn.Module):
         if binary:
             mask = torch.where(mask > 0.5, 1.0, 0.0)
 
-        # This needs to be cleaned up
-        if self.network_input_type == 'polar':
-            # If polar input, original output mask is polar
-            # Apply mask to desired output form
-            if self.network_output_type == 'polar':
-                output_data = fft_weights * mask
-
-            elif self.network_output_type == 'cartesian':
-                mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
-                bev_data = radar_polar_to_cartesian_diff(fft_weights, azimuths, self.res)
-                output_data = bev_data * mask
-
-        elif self.network_input_type == 'cartesian':
-            # If cartesian input, original output mask is cartesian
-            # Apply mask to desired output form
-            if self.network_output_type == 'polar':
-                mask = radar_cartesian_to_polar(mask, azimuths, self.res)
-                output_data = fft_weights * mask
-            
-            elif self.network_output_type == 'cartesian':
-                bev_data = radar_polar_to_cartesian_diff(fft_weights, azimuths, self.res)
-                output_data = bev_data * mask
-
-        # output_data is now the weights for each non-zero pixel in fft_cfar
         # Extract weights correcponding to scan_pc
-        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(mask, scan_pc)
+        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(mask, scan_pc_raw)
 
         # Save params
         self.mean_num_pts = mean_num_non0
@@ -224,12 +196,12 @@ class LearnICPWeightPolicy(nn.Module):
         self.min_w = min_w
         self.mean_w = mean_w
 
-        non0_x = scan_pc[:,:,0] != 0.0
-        non0_y = scan_pc[:,:,1] != 0.0
+        non0_x = scan_pc_raw[:,:,0] != 0.0
+        non0_y = scan_pc_raw[:,:,1] != 0.0
         non0_pts = non0_x * non0_y
-        self.mean_all_pts = torch.sum(non0_pts) / scan_pc.shape[0]
+        self.mean_all_pts = torch.sum(non0_pts) / scan_pc_raw.shape[0]
 
-        del fft_data, fft_cfar, fft_weights, output_data
+        del fft_data, fft_cfar, fft_weights
         torch.cuda.empty_cache()
 
         if neptune_run is not None:
@@ -237,7 +209,7 @@ class LearnICPWeightPolicy(nn.Module):
             map_pc_0 = map_pc[0].detach().cpu().numpy()
             # Only use map_pc_0 that are less than self.ICP_alg.target_pad_val
             map_pc_0 = map_pc_0[map_pc_0[:, 0] < self.ICP_alg.target_pad_val]
-            scan_pc_0 = scan_pc[0].detach().cpu().numpy()
+            scan_pc_0 = scan_pc_raw[0].detach().cpu().numpy()
             # Only use scan_pc_0 points that aren't exactly 0
             scan_w_0 = weights[0].detach().cpu().numpy()
             scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
@@ -269,8 +241,10 @@ class LearnICPWeightPolicy(nn.Module):
             plt.close(fig)
 
         # Pass the modified fft_data through ICP
+        del scan_pc_raw
+        scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
         if self.use_icp > 0.0:
-            T_est = self.icp(scan_pc, map_pc, T_init, weights)
+            T_est = self.icp(scan_pc_filt, map_pc, T_init, weights)
         else:
             T_est = T_init
 
