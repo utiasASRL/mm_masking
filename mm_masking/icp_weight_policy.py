@@ -254,11 +254,11 @@ class LearnICPWeightPolicy(nn.Module):
         loss_fn = {"name": "cauchy", "metric": 1.0}
         trim_dist = 5.0
         if self.training:
-            _, T_ms, _ = self.ICP_alg.icp(scan_pc, map_pc, 
+            icp_result = self.ICP_alg.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
                                     trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
         else:
-            _, T_ms, _ = self.ICP_alg_inference.icp(scan_pc, map_pc, 
+            icp_result = self.ICP_alg_inference.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
                                     trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
-        return T_ms
+        return icp_result['T']
