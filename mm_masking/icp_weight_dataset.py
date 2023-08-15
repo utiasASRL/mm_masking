@@ -22,6 +22,7 @@ import vtr_pose_graph.graph_utils as g_utils
 from vtr_pose_graph.graph_iterators import TemporalIterator
 from utils.extract_graph import extract_points_and_map
 import time
+import pandas as pd
 
 class ICPWeightDataset():
 
@@ -75,7 +76,6 @@ class ICPWeightDataset():
 
             gt_map_poses, gt_map_times = read_traj_file_gt2(osp.join(dataset_dir, map_seq, "applanix", map_sensor + "_poses.csv"), dim=2)
             gt_loc_poses, gt_loc_times = read_traj_file_gt2(osp.join(dataset_dir, loc_seq, "applanix", loc_sensor + "_poses.csv"), dim=2)
-            
             graph_dir = osp.join(vtr_result_dir, sensor_dir_name, map_seq, loc_seq, 'graph')
             factory = Rosbag2GraphFactory(graph_dir)
 
@@ -99,8 +99,31 @@ class ICPWeightDataset():
             T_map_sensor_robot = torch.from_numpy(get_inverse_tf(T_robot_map_sensor)).type(float_type)
             self.T_map_sensor_robot.append(T_map_sensor_robot)
 
+            # Check if result directory contains a metadata file
+            # If not, create one
+            metadata_path = osp.join(vtr_result_dir, sensor_dir_name, map_seq, loc_seq, 'metadata.csv')
+            if not osp.exists(metadata_path):
+                df_data = {'complete' : 0, 'up_to_idx': -1, 'max_loc': -1, 'max_map': -1}
+                df = pd.DataFrame(df_data, index=[0])
+                df.to_csv(metadata_path, index=False)
+
+            # Load in the metadata file to see if we need to extract max points during
+            # data loading. 
+            pair_df = pd.read_csv(metadata_path)
+            # If we have sufficient metadata about what we wish to extract,
+            # don't bother extracting more
+            extract_pcs_metadata = True
+            if (pair_df['complete'][0] == 1 or pair_df['up_to_idx'][0] >= num_samples):
+                extract_pcs_metadata = False
+                # Check if new max is reached
+                if pair_df['max_loc'][0] > self.max_loc_pts:
+                    self.max_loc_pts = pair_df['max_loc'][0]
+                if pair_df['max_map'][0] > self.max_map_pts:
+                    self.max_map_pts = pair_df['max_map'][0]
             
             ii = -1
+            local_max_loc_pts = 0
+            local_max_map_pts = 0
             for loc_v, e in TemporalIterator(v_start):
                 ii += 1
                 # Check if vertex is valid
@@ -108,8 +131,11 @@ class ICPWeightDataset():
                     continue
                 
                 # Extract vertex info
-                curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix)
-                assert curr_raw_pts.shape == curr_filt_pts.shape, 'Raw and filtered pointclouds dont match!'
+                map_v = g_utils.get_closest_teach_vertex(loc_v)
+
+                # Extract timestamps
+                loc_stamp = int(loc_v.stamp * 1e-3)
+                map_stamp = int(map_v.stamp * 1e-3)
 
                 # Ensure radar image exists
                 loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
@@ -123,7 +149,7 @@ class ICPWeightDataset():
                 if not osp.exists(cfar_dir):
                     os.makedirs(cfar_dir)
                 loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + '.png')
-                if not osp.exists(loc_cfar_path) or True:
+                if not osp.exists(loc_cfar_path):
                     loc_radar_img = cv2.imread(loc_radar_path, cv2.IMREAD_GRAYSCALE)
                     fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
                     fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
@@ -150,14 +176,20 @@ class ICPWeightDataset():
                 T_gt_idx = torch.tensor(gt_T_s2_s1, dtype=float_type)
 
                 # Now that we have ground truth, we can filter the map points to know max point size
-                # We only do filtering for lidar
-                if map_sensor == 'lidar':
-                    map_pts, map_norms = self.filter_map(map_pts, map_norms, T_gt_idx)
+                # We only do filtering for lidar and only if we dont already have
+                # pointcloud metadata. This is done to speed up data loading
+                if extract_pcs_metadata:
+                    curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix)
+                    assert curr_raw_pts.shape == curr_filt_pts.shape, 'Raw and filtered pointclouds dont match!'
 
-                if curr_raw_pts.shape[0] > self.max_loc_pts:
-                    self.max_loc_pts = curr_raw_pts.shape[0]
-                if map_pts.shape[0] > self.max_map_pts:
-                    self.max_map_pts = map_pts.shape[0]
+                    map_pts_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_pts.T + T_map_sensor_robot[:3, 3:4]).T
+                    map_norms_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_norms.T).T
+                    map_pts, map_norms = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_gt_idx)
+                    
+                    if curr_raw_pts.shape[0] > local_max_loc_pts:
+                        local_max_loc_pts = curr_raw_pts.shape[0]
+                    if map_pts.shape[0] > local_max_map_pts:
+                        local_max_map_pts = map_pts.shape[0]
 
                 # Also, generate random perturbation to ground truth pose
                 # The map pointcloud is transformed into the scan frame using T_gt
@@ -197,6 +229,20 @@ class ICPWeightDataset():
 
                 if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples:
                     break
+            
+            # Update metadata if it was collected
+            if extract_pcs_metadata:
+                # Save metadata
+                meta_complete = (num_samples == -1)
+                df_data = {'complete' : meta_complete, 'up_to_idx': ii, 'max_loc': local_max_loc_pts, 'max_map': local_max_map_pts}
+                df = pd.DataFrame(df_data, index=[0])
+                df.to_csv(metadata_path, index=False)
+                
+                # Overwrite max point sizes if they are larger
+                if local_max_loc_pts > self.max_loc_pts:
+                    self.max_loc_pts = local_max_loc_pts
+                if map_pts.shape[0] > self.max_map_pts:
+                    self.max_map_pts = map_pts.shape[0]
 
         # Assert that the number of all elements are the same
         assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_gt.shape[0] \
@@ -214,7 +260,7 @@ class ICPWeightDataset():
 
         # Load in pointclouds and timestamps
         scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
-
+        assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
         """
         map_pts_curr_frame = (T_ml_gt[:3,:3] @ map_pc[:,:3].T + T_ml_gt[:3,3].unsqueeze(1)).T
         plt.figure(figsize=(15,15))
@@ -260,7 +306,7 @@ class ICPWeightDataset():
         scan_pc_pad = torch.zeros((self.max_loc_pts - curr_raw_pts.shape[0], 3), dtype=self.float_type)
         scan_pc_raw = torch.cat((curr_raw_pts, scan_pc_pad), dim=0)
         scan_pc_filt = torch.cat((curr_filt_pts, scan_pc_pad), dim=0)
-
+        
         # Transform map pointcloud to scan frame
         map_pts = torch.from_numpy(map_pts)
         map_norms = torch.from_numpy(map_norms)

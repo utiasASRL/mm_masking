@@ -348,37 +348,37 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="async"
+        mode="debug"
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 1,
-        "num_test": 1,
+        "num_train": -1,
+        "num_test": -1,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
         "pos_std": 2.0,             # Standard deviation of position initial guess
         "rot_std": 0.3,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
-        "map_sensor": "lidar",
+        "map_sensor": "radar",
         "loc_sensor": "radar",
         "log_transform": False,      # True or false for log transform of fft data
         "normalize": ["minmax"],  # Options are "minmax", "standardize", and none
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 1,
+        "batch_size": 8,
         "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 1e-3,#5*1e-5,
+        "learning_rate": 1e-4,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
-        "dropout": 0.0,   # Dropout rate, set 0 for no dropout
+        "dropout": 0.01,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
         "init_weights": True, # True or false for manually initializing weights
         "clip_value": 0.0, # Value to clip gradients at, set 0 for no clipping
@@ -390,7 +390,7 @@ def main(args):
         "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.1, # Weight for cfar mask loss
+        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
@@ -420,6 +420,7 @@ def main(args):
     #train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-02-09-12-55"]]
     val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
 
+    tic = time.time()
     train_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
                                         pc_dir=args.pc_dir,
                                         radar_dir=args.radar_dir,
@@ -435,6 +436,9 @@ def main(args):
                                         rot_std=params["rot_std"],
                                         a_thresh=params["a_thresh"],
                                         b_thresh=params["b_thresh"])
+    toc = time.time()
+    print("Time to load train dataset: ", toc-tic)
+    tic = time.time()
     test_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
                                         pc_dir=args.pc_dir,
                                         radar_dir=args.radar_dir,
@@ -450,7 +454,8 @@ def main(args):
                                         rot_std=params["rot_std"],
                                         a_thresh=params["a_thresh"],
                                         b_thresh=params["b_thresh"])
-
+    toc = time.time()
+    print("Time to load test dataset: ", toc-tic)
     print("Dataset created")
     print("Number of training examples: ", len(train_dataset))
     print("Number of validation examples: ", len(test_dataset))
@@ -458,8 +463,8 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4)
-    validation_iterator = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=4)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=8)
+    validation_iterator = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=8)
     print("Dataloader created")
 
     # Initialize policy
