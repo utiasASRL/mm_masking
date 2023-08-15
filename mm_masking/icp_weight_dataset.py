@@ -52,7 +52,7 @@ class ICPWeightDataset():
             raise ValueError("Invalid sensor combination")
 
         data_dir = '../data'
-        dataset_dir = osp.join(data_dir, 'vtr_data/boreas')
+        dataset_dir = osp.join(data_dir, 'vtr_data')
         vtr_result_dir = osp.join(data_dir, 'vtr_results')
         polar_res = 0.0596
         network_input_type = 'cartesian'
@@ -69,7 +69,6 @@ class ICPWeightDataset():
         self.max_loc_pts = 0
         self.max_map_pts = 0
 
-        
         for pair_idx, pair in enumerate(loc_pairs):
             map_seq = pair[0]
             loc_seq = pair[1]
@@ -113,14 +112,14 @@ class ICPWeightDataset():
             # If we have sufficient metadata about what we wish to extract,
             # don't bother extracting more
             extract_pcs_metadata = True
-            if (pair_df['complete'][0] == 1 or pair_df['up_to_idx'][0] >= num_samples):
+            if (pair_df['complete'][0] == 1 or (pair_df['up_to_idx'][0] >= num_samples and num_samples>0)):
                 extract_pcs_metadata = False
                 # Check if new max is reached
                 if pair_df['max_loc'][0] > self.max_loc_pts:
                     self.max_loc_pts = pair_df['max_loc'][0]
                 if pair_df['max_map'][0] > self.max_map_pts:
                     self.max_map_pts = pair_df['max_map'][0]
-            
+            print(extract_pcs_metadata)
             ii = -1
             local_max_loc_pts = 0
             local_max_map_pts = 0
@@ -226,6 +225,9 @@ class ICPWeightDataset():
                     self.graph_id_vector = np.append(self.graph_id_vector, pair_idx)
                     self.T_loc_gt = torch.cat((self.T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
                     self.T_loc_init = torch.cat((self.T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
+
+                if (ii % 100) == 0:
+                    print(str(ii) + " samples generated")
 
                 if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples:
                     break
