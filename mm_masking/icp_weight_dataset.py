@@ -243,8 +243,8 @@ class ICPWeightDataset():
                 # Overwrite max point sizes if they are larger
                 if local_max_loc_pts > self.max_loc_pts:
                     self.max_loc_pts = local_max_loc_pts
-                if map_pts.shape[0] > self.max_map_pts:
-                    self.max_map_pts = map_pts.shape[0]
+                if local_max_map_pts > self.max_map_pts:
+                    self.max_map_pts = local_max_map_pts
 
         # Assert that the number of all elements are the same
         assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_gt.shape[0] \
