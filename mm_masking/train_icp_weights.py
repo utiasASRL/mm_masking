@@ -21,17 +21,14 @@ from radar_utils import radar_polar_to_cartesian_diff
 scaler = torch.cuda.amp.GradScaler()
 
 def train_policy(model, iterator, opt, loss_weights=[],
-                 device='cpu', neptune_run=None, epoch=None, clip_value=0.0,
+                 device='cpu', epoch=None,
                  icp_loss_only_iter=0, gt_eye=True):
     model.train()
-    loss_hist = []
+    loss_hist = 0.0
     loss_comp_hist = []
-    encoder_norm = []
-    decoder_norm = []
-    final_layer_norm = []
 
     for i_batch, batch in enumerate(iterator):
-        print("Batch: ", i_batch)
+        #print("Batch: ", i_batch)
         # Load in data
         batch_scan = batch['loc_data']
         batch_map = batch['map_data']
@@ -48,57 +45,34 @@ def train_policy(model, iterator, opt, loss_weights=[],
             # Compute loss
             batch_T_gt = batch_T['T_ml_gt'].to(device)
             loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
-                                    icp_loss_only_iter=icp_loss_only_iter, gt_eye=True, epoch=epoch)
+                                    icp_loss_only_iter=icp_loss_only_iter, gt_eye=gt_eye, epoch=epoch)
             del batch_T_gt, mask, T_pred, batch_scan
         # Compute the derivatives
         scaler.scale(loss).backward()
         #loss.backward()
 
-        if clip_value > 0.0:
-            #nn.utils.clip_grad_value_(model.parameters(), clip_value=clip_value)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
-
-        # Store the norm of the gradients for each stage of unet
-        for module in model.encoder:
-            layer_norm = 0.0
-            for layer in module.parameters():
-                layer_norm += layer.grad.norm().detach().cpu().numpy()
-            encoder_norm.append(layer_norm)
-        for module in model.decoder:
-            layer_norm = 0.0
-            for layer in module.parameters():
-                layer_norm += layer.grad.norm().detach().cpu().numpy()
-            decoder_norm.append(layer_norm)
-        for layer in model.final_layer:
-            layer_norm = 0.0
-            for layer in module.parameters():
-                layer_norm += layer.grad.norm().detach().cpu().numpy()
-            final_layer_norm.append(layer_norm)
-        
         # Take step
         scaler.step(opt)
         scaler.update()
         #opt.step()
         
-        loss = loss.detach().cpu().numpy()
-        loss_hist.append(loss)
+        loss_hist += loss.detach()
         loss_comp_hist.append(loss_comp)
         del loss
         torch.cuda.empty_cache()
 
-    mean_loss = np.mean(loss_hist)
+    mean_loss = loss_hist/len(iterator)
     # Compute mean of each loss component
     mean_loss_comp = {}
     for key in loss_comp_hist[0].keys():
         mean_loss_comp[key] = sum(d[key] for d in loss_comp_hist) / len(loss_comp_hist)
 
-    batch_grad_norm = {'encoder': encoder_norm, 'decoder': decoder_norm, 'final_layer': final_layer_norm}
-    return mean_loss, mean_loss_comp, batch_grad_norm
+    return mean_loss, mean_loss_comp
 
-def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, binary=False,
+def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
                     neptune_run=None, epoch=None):
     model.eval()
-    val_acc_list = []
+    val_acc = torch.zeros((1,3), device=device)
     mean_num_pc = 0.0
     max_w = 0.0
     min_w = 1000.0
@@ -106,7 +80,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
 
     with torch.no_grad():
         for i_batch, batch in enumerate(iterator):
-            print("Batch: ", i_batch)
+            #print("Batch: ", i_batch)
             # Load in data
             batch_scan = batch['loc_data']
             batch_map = batch['map_data']
@@ -129,8 +103,8 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
             mean_w += model.mean_w
 
             # Compute validation loss
-            val_acc = eval_validation_loss(T_pred, batch_T_gt, gt_eye=gt_eye)
-            val_acc_list.append(val_acc)
+            val_acc_i = eval_validation_loss(T_pred, batch_T_gt, gt_eye=gt_eye)
+            val_acc += val_acc_i
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
             if neptune_run is not None and epoch is not None and i_batch <= 10:
@@ -184,18 +158,18 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
 
         mean_num_pc /= len(iterator)
         mean_w /= len(iterator)
-        print("Mean number of point clouds: ", mean_num_pc)
+        #print("Mean number of point clouds: ", mean_num_pc)
 
-        val_acc = np.mean(np.mean(val_acc_list, axis=1), axis=0)
+        val_acc /= len(iterator)
 
     return val_acc, mean_num_pc, mean_w, max_w, min_w
 
 def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=[],
                        icp_loss_only_iter=0, gt_eye=True, epoch=0):
     mask_criterion = torch.nn.BCEWithLogitsLoss()
-    loss_rot = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
-    loss_trans = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
-    loss_fft = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
+    loss_rot = torch.zeros(1, device=T_pred.device)
+    loss_trans = torch.zeros(1, device=T_pred.device)
+    loss_fft = torch.zeros(1, device=T_pred.device)
     loss_mask_pts = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
     loss_cfar = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
     loss_num_pts = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
@@ -204,9 +178,9 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
     if loss_weights['icp_rot'] > 0.0 or loss_weights['icp_trans'] > 0.0:
         # Compute ICP loss
         if gt_eye:
-            xi_wedge = T_pred - torch.eye(4, dtype=torch.float64, device=T_pred.device)
+            xi_wedge = T_pred - torch.eye(4, dtype=T_pred.dtype, device=T_pred.device)
         else:
-            xi_wedge = torch.matmul(T_pred, torch.inverse(batch_T_gt)) - torch.eye(4, dtype=torch.float64, device=T_pred.device)
+            xi_wedge = torch.matmul(T_pred, torch.inverse(batch_T_gt)) - torch.eye(4, dtype=T_pred.dtype, device=T_pred.device)
         # Extract xi components
         xi_r = xi_wedge[:, 0:2, 3]
         xi_theta = xi_wedge[:, 1, 0].unsqueeze(-1)
@@ -250,12 +224,12 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
     #    " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
     #    " Num pts: ", loss_weights['num_pts']*loss_num_pts)
 
-    L_rot = (loss_weights['icp_rot']*loss_rot).detach().cpu().numpy()
-    L_trans = (loss_weights['icp_trans']*loss_trans).detach().cpu().numpy()
-    L_fft = (loss_weights['fft']*loss_fft).detach().cpu().numpy()
-    L_mask_pts = (loss_weights['mask_pts']*loss_mask_pts).detach().cpu().numpy()
-    L_cfar = (loss_weights['cfar']*loss_cfar).detach().cpu().numpy()
-    L_num_pts = (loss_weights['num_pts']*loss_num_pts).detach().cpu().numpy()
+    L_rot = (loss_weights['icp_rot']*loss_rot).detach()
+    L_trans = (loss_weights['icp_trans']*loss_trans).detach()
+    L_fft = (loss_weights['fft']*loss_fft).detach()
+    L_mask_pts = (loss_weights['mask_pts']*loss_mask_pts).detach()
+    L_cfar = (loss_weights['cfar']*loss_cfar).detach()
+    L_num_pts = (loss_weights['num_pts']*loss_num_pts).detach()
 
     loss_components = {"rot": L_rot, "trans": L_trans, "fft": L_fft, "mask_pts": L_mask_pts,
                        "cfar": L_cfar, "num_pts": L_num_pts}
@@ -263,23 +237,21 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
     return loss, loss_components
 
 def eval_validation_loss(T_pred, batch_T_gt, gt_eye=True):
-    err = np.zeros((T_pred.shape[0], 6))
-    norm_err = np.zeros((T_pred.shape[0], 1))
-    rot_err = np.zeros((T_pred.shape[0], 1))
-    trans_err = np.zeros((T_pred.shape[0], 1))
-
-    for jj in range(T_pred.shape[0]):
-        if gt_eye:
-            Err = T_pred[jj].detach().cpu().numpy()
-        else:
-            Err = T_pred[jj].detach().cpu().numpy() @ np.linalg.inv(batch_T_gt[jj].detach().cpu().numpy())
-        err[jj] = se3op.tran2vec(Err).flatten()
-        rot_err[jj] = np.linalg.norm(err[jj][0:3])
-        trans_err[jj] = np.linalg.norm(err[jj][3:6])
-        norm_err[jj] = np.linalg.norm(err[jj])
     
+    # Compute ICP error
+    if gt_eye:
+        xi_wedge = T_pred - torch.eye(4, dtype=T_pred.dtype, device=T_pred.device)
+    else:
+        xi_wedge = torch.matmul(T_pred, torch.inverse(batch_T_gt)) - torch.eye(4, dtype=T_pred.dtype, device=T_pred.device)
+    # Extract xi components
+    xi_r = xi_wedge[:, 0:2, 3]
+    xi_theta = xi_wedge[:, 1, 0].unsqueeze(-1)
+    norm_err = torch.norm(xi_wedge, dim=1).mean()
+    rot_err = torch.norm(xi_theta, dim=1).mean()
+    trans_err = torch.norm(xi_r, dim=1).mean()
+
     # Stack errors together
-    tot_err = np.hstack((norm_err, rot_err, trans_err))
+    tot_err = torch.hstack((norm_err, rot_err, trans_err))
 
     return tot_err
     
@@ -298,7 +270,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
 
     with torch.no_grad():
         for i_batch, batch in enumerate(iterator):
-            print("Batch: ", i_batch)
+            #print("Batch: ", i_batch)
             # Load in data
             batch_scan = batch['loc_data']
             batch_map = batch['map_data']
@@ -338,8 +310,8 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
             elif baseline_type == "val":
                 loss_init = eval_validation_loss(batch_T_init, batch_T_gt, gt_eye=gt_eye)
                 loss_ones = eval_validation_loss(T_pred_ones, batch_T_gt, gt_eye=gt_eye)
-                loss_init = loss_init[0]
-                loss_ones = loss_ones[0]
+                loss_init = loss_init[0].detach().cpu().numpy()
+                loss_ones = loss_ones[0].detach().cpu().numpy()
             # Save loss for full error
             loss_init_hist.append(loss_init)
             loss_ones_hist.append(loss_ones)
@@ -364,8 +336,10 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": -1,
-        "num_test": 256,
+        "num_train": 32,
+        "num_test": 16,
+        #"num_train": 1,
+        #"num_test": 1,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
@@ -379,7 +353,8 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 16,
+        "batch_size": 8,
+        #"batch_size": 1,
         "shuffle": True,
 
         # Training params
@@ -403,7 +378,7 @@ def main(args):
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
-        "max_iter": 8, # Maximum number of iterations for icp
+        "max_iter": 1, # Maximum number of iterations for icp
 
         # Model setup
         "network_input_type": "cartesian", # Options are "cartesian" and "polar", what the network takes in
@@ -416,7 +391,6 @@ def main(args):
     }
 
     print("Using device: ", params['device'])
-    torch.set_default_dtype(params["float_type"])
 
     loss_weights = {"icp_rot": params["loss_icp_rot_weight"], "icp_trans": params["loss_icp_trans_weight"],
                     "fft": params["loss_fft_mask_weight"],
@@ -428,7 +402,7 @@ def main(args):
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"],]
                        #["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"],
                        #["boreas-2020-11-26-13-58", "boreas-2021-03-09-14-23"]]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-02-09-12-55"]]
+    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
 
     tic = time.time()
     train_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
@@ -474,7 +448,7 @@ def main(args):
 
     # Form iterators
     training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
-    validation_iterator = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
+    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
     print("Dataloader created")
 
     # Initialize policy
@@ -502,15 +476,9 @@ def main(args):
 
     print("Policy and optimizer created")
 
-    # Set learning rate scheduler
-    #scheduler = StepLR(opt, step_size=25, gamma=0.9)
-
     npt_logger = NeptuneLogger(
         run=run,
         model=policy,
-        log_gradients=True,
-        log_parameters=True,
-        log_freq=1,
     )
     run[npt_logger.base_namespace]["parameters"] = stringify_unsupported(
         params
@@ -542,10 +510,11 @@ def main(args):
                                          neptune_run=run, epoch=-1)
     #avg_norm = 1000
     # Compute best norm from total error
-    best_norm = avg_norm[0]
+    best_norm = avg_norm[0, 0]
 
-    print("Norm before training: ", avg_norm[0])
+    print("Norm before training: ", avg_norm[0, 0])
     for epoch in range(params["num_epochs"]):
+        tic_epoch = time.time()
         print ('EPOCH ', epoch)
 
         # Train the driving policy
@@ -553,27 +522,37 @@ def main(args):
             neptune_run = run
         else:
             neptune_run = None
-        mean_loss, mean_loss_comp, batch_grad_norm = train_policy(policy, training_iterator, opt, loss_weights, device=params["device"],
-                                 clip_value=params["clip_value"], epoch=epoch,
-                                 icp_loss_only_iter=params["icp_loss_only_iter"], gt_eye=params["gt_eye"])
+        tic = time.time()
+        mean_loss, mean_loss_comp = train_policy(policy, training_iterator, opt, loss_weights, device=params["device"],
+                                 epoch=epoch, icp_loss_only_iter=params["icp_loss_only_iter"], gt_eye=params["gt_eye"])
+        toc = time.time()
+        epoch_train_time = toc-tic
+        avg_sample_train_time = epoch_train_time/len(train_dataset)
         loss_hist.append(mean_loss)
 
         # Validate the driving policy
         print("Validating")
+        tic = time.time()
         avg_norm, mean_num_pc, mean_w, max_w, min_w = validate_policy(policy, validation_iterator, neptune_run=neptune_run, epoch=epoch,
                                    device=params["device"], binary=params["binary_inference"], gt_eye=params["gt_eye"])
-
-        if avg_norm[0] < best_norm or epoch == 0:
+        toc = time.time()
+        epoch_val_time = toc-tic
+        avg_sample_val_time = epoch_val_time/len(test_dataset)
+        if avg_norm[0, 0] < best_norm or epoch == 0:
             print("Saving best policy")
-            best_norm = avg_norm[0]
+            best_norm = avg_norm[0, 0]
             torch.save(policy.state_dict(), result_naming + '_best_policy.pt')
 
-        print("Average norm: ", avg_norm[0])
+        print("Average norm: ", avg_norm[0, 0])
         print("Best norm: ", best_norm)
 
+        toc_epoch = time.time()
+        epoch_time = toc_epoch - tic_epoch
+        #print("Epoch time: ", epoch_time)
+
         #scheduler.step()
-        # Log loss 
-        run[npt_logger.base_namespace]["epoch/loss"].append(mean_loss.item())
+        # Log loss
+        run[npt_logger.base_namespace]["epoch/loss"].append(mean_loss)
         run[npt_logger.base_namespace]["epoch/loss_rot"].append(mean_loss_comp["rot"])
         run[npt_logger.base_namespace]["epoch/loss_trans"].append(mean_loss_comp["trans"])
         run[npt_logger.base_namespace]["epoch/loss_fft"].append(mean_loss_comp["fft"])
@@ -582,28 +561,30 @@ def main(args):
         run[npt_logger.base_namespace]["epoch/loss_num_pts"].append(mean_loss_comp["num_pts"])
 
         # Log accuracy
-        run[npt_logger.base_namespace]["epoch/acc"].append(avg_norm[0].item())
-        run[npt_logger.base_namespace]["epoch/acc_rot"].append(avg_norm[1].item())
-        run[npt_logger.base_namespace]["epoch/acc_trans"].append(avg_norm[2].item())
+        run[npt_logger.base_namespace]["epoch/acc"].append(avg_norm[0,0])
+        run[npt_logger.base_namespace]["epoch/acc_rot"].append(avg_norm[0,1])
+        run[npt_logger.base_namespace]["epoch/acc_trans"].append(avg_norm[0,2])
         run[npt_logger.base_namespace]["epoch/mean_num_pc"].append(mean_num_pc)
         run[npt_logger.base_namespace]["epoch/mean_w"].append(mean_w)
         run[npt_logger.base_namespace]["epoch/max_w"].append(max_w)
         run[npt_logger.base_namespace]["epoch/min_w"].append(min_w)
-        run[npt_logger.base_namespace]["epoch/encoder_grad_norm"].append(np.mean(batch_grad_norm["encoder"]))
-        run[npt_logger.base_namespace]["epoch/decoder_grad_norm"].append(np.mean(batch_grad_norm["decoder"]))
-        run[npt_logger.base_namespace]["epoch/final_layer_grad_norm"].append(np.mean(batch_grad_norm["final_layer"]))
+        run[npt_logger.base_namespace]["epoch/avg_sample_train_time"].append(avg_sample_train_time)
+        run[npt_logger.base_namespace]["epoch/avg_sample_val_time"].append(avg_sample_val_time)
+        run[npt_logger.base_namespace]["epoch/epoch_train_time"].append(epoch_train_time)
+        run[npt_logger.base_namespace]["epoch/epoch_val_time"].append(epoch_val_time)
+        run[npt_logger.base_namespace]["epoch/epoch_time"].append(epoch_time)
 
         # Save baseline for reference
-        run[npt_logger.base_namespace]["epoch/train_init_baseline"].append(train_init_baseline.item())
-        run[npt_logger.base_namespace]["epoch/train_ones_baseline"].append(train_ones_baseline.item())
-        run[npt_logger.base_namespace]["epoch/val_init_baseline"].append(val_init_baseline.item())
-        run[npt_logger.base_namespace]["epoch/val_ones_baseline"].append(val_ones_baseline.item())
+        run[npt_logger.base_namespace]["epoch/train_init_baseline"].append(train_init_baseline)
+        run[npt_logger.base_namespace]["epoch/train_ones_baseline"].append(train_ones_baseline)
+        run[npt_logger.base_namespace]["epoch/val_init_baseline"].append(val_init_baseline)
+        run[npt_logger.base_namespace]["epoch/val_ones_baseline"].append(val_ones_baseline)
 
     # Do final validation using the best policy
     policy.load_state_dict(torch.load(result_naming + '_best_policy.pt'))
     avg_norm, _, _, _, _ = validate_policy(policy, validation_iterator, neptune_run=neptune_run, epoch=epoch,
                                    device=params["device"], binary=params["binary_inference"], gt_eye=params["gt_eye"])
-    print("Best average norm: ", avg_norm[0])
+    print("Best average norm: ", avg_norm[0,0])
     
     run.stop()
 

@@ -34,15 +34,15 @@ class LearnICPWeightPolicy(nn.Module):
         self.res = 0.0596   # This is the old resolution!
 
         config_path = '../external/dICP/config/dICP_config.yaml'
-        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-4)
-        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=2, tolerance=1e-4)
+        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
+        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=50, tolerance=1e-5)
         self.float_type = float_type
         self.device = device
         self.network_inputs = network_inputs
         if network_input_type == 'cartesian':
-            self.range_mask, _ = form_cart_range_angle_grid(dtype=float_type, device=device)
+            self.range_mask, _ = form_cart_range_angle_grid(device=device)
         elif network_input_type == 'polar':
-            self.range_mask = form_polar_range_grid(polar_resolution=self.res, dtype=float_type, device=device)
+            self.range_mask = form_polar_range_grid(polar_resolution=self.res, device=device)
         
         self.network_input_type = network_input_type
         self.network_output_type = network_output_type

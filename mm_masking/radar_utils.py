@@ -7,17 +7,14 @@ import torch.nn.functional as F
 import cv2
 import time
 
-def load_pc_from_file(file_path, to_type=torch.float64, to_device='cpu', flip_y=False):
+def load_pc_from_file(file_path, to_type=None, to_device='cpu'):
     pc = np.fromfile(file_path, dtype=np.float32)
     pc = pc.reshape((len(pc) // 6, 6))
-    # For some dumb reason, the map point cloud is flipped in the y-axis
-    if flip_y:
-        pc[:, 1] = -pc[:, 1]
-        pc[:, 4] = -pc[:, 4]
     # Send to device
     pc = torch.from_numpy(pc).to(to_device)
     # Convert to type
-    pc = pc.type(to_type)
+    if to_type is not None:
+        pc = pc.type(to_type)
     return pc
 
 def load_radar(raw_img):
@@ -108,62 +105,10 @@ def extract_pc(thres_mask, res, azimuth_angles, azimuth_times, T_ab=None, diff=T
 
     return pc_list
 
-def extract_weights_old(weight_scan, thres_mask, res, diff=True, steep_fact=10.0, uni_dim=0):
-    device = weight_scan.device
-    
-    # Thresholded the raw scans, want to have same indices as thres_mask for weight extraction
-    thres_scan = res * torch.ones(thres_mask.shape, device=device) * torch.arange(thres_mask.shape[2], device=device) * thres_mask
-
-    # Find peaks of thresholded points
-    # Don't need this to be differentiable
-    peak_points = mean_peaks_parallel_fast(thres_scan, diff=False, steep_fact=steep_fact)
-    weight_points = mean_peaks_parallel_fast(weight_scan, diff=diff, steep_fact=steep_fact)
-
-    # Flatten peak_points along third dimensions
-    peak_pt_vec = peak_points.reshape(peak_points.shape[0], -1)
-    weight_pt_vec = weight_points.reshape(weight_points.shape[0], -1)
-    w_return = []
-    mean_num_non0 = 0
-    max_w = 0
-    min_w = 1000
-
-    for ii in range(peak_pt_vec.shape[0]):
-        peak_pt_vec_ii = peak_pt_vec[ii]
-        weight_pt_vec_ii = weight_pt_vec[ii]
-        nonzero_indices = peak_pt_vec_ii.nonzero(as_tuple=True)
-        # Find the mean between every two consecutive peaks in nonzero_ii
-        nonzero_odd_indices = nonzero_indices[0][1::2]
-        nonzero_even_indices = nonzero_indices[0][0::2]
-        # Select indices from weight array
-        nonzero_ii_start = weight_pt_vec_ii[nonzero_odd_indices]
-        nonzero_ii_end = weight_pt_vec_ii[nonzero_even_indices]
-        w_ii = (nonzero_ii_start + nonzero_ii_end) / 2.0
-
-        # Compute stats before padding with 0s
-        if torch.max(w_ii).detach().cpu().numpy() > max_w:
-            max_w = torch.max(w_ii).detach().cpu().numpy()
-        if torch.min(w_ii).detach().cpu().numpy() < min_w:
-            min_w = torch.min(w_ii).detach().cpu().numpy()
-
-        if uni_dim <= 0:
-            w_return.append(w_ii)
-        else:
-            # In this case, we have a unified dimension that we want all weights to have
-            # So, we need to pad the weights with zeros and can return them as a tensor
-            w_ii = torch.cat((w_ii, torch.zeros(uni_dim - w_ii.shape[0], device=device)))
-            if w_return == []:
-                w_return = w_ii.unsqueeze(0)
-            else:
-                w_return = torch.cat((w_return, w_ii.unsqueeze(0)), dim=0)
-        mean_num_non0 += torch.sum(w_ii > 0.01).detach().cpu().numpy()
-
-    mean_num_non0 /= peak_pt_vec.shape[0]
-
-    return w_return, mean_num_non0, max_w, min_w
-
 def extract_weights(mask, scan_pc):
     # Extract weights from mask corresponding to scan_pc points
     mask_c = mask.unsqueeze(1)
+    scan_pc = scan_pc.type(mask_c.dtype)
     grid_pc = point_to_cart_idx(scan_pc, min_to_plus_1=True)
 
     # scan_pc has filled in (0, 0) points for batch shape matching
@@ -184,11 +129,11 @@ def extract_weights(mask, scan_pc):
 
     # Compute stats
     # Weights below 0.05 are considered non-impactful/0
-    mean_num_non0 = (torch.sum(weights[~fake_scan_idx] > 0.05)/weights.shape[0]).detach().cpu().numpy()
+    mean_num_non0 = (torch.sum(weights[~fake_scan_idx] > 0.05)/weights.shape[0]).detach()
 
-    mean_w = torch.mean(weights[~fake_scan_idx]).detach().cpu().numpy()
-    max_w = torch.max(weights[~fake_scan_idx]).detach().cpu().numpy()
-    min_w = torch.min(weights[~fake_scan_idx]).detach().cpu().numpy()
+    mean_w = torch.mean(weights[~fake_scan_idx]).detach()
+    max_w = torch.max(weights[~fake_scan_idx]).detach()
+    min_w = torch.min(weights[~fake_scan_idx]).detach()
     # Compute number of non 0 weights in a differentiable way for backprop
     diff_mean_num_non0 = torch.sum(0.5 * torch.tanh(5*weights[~fake_scan_idx]) + 0.5) / weights.shape[0]
 
@@ -426,7 +371,7 @@ def point_to_cart_idx(pc, cart_resolution=0.2384, cart_pixel_width=640, min_to_p
 
     return grid_pc
 
-def form_cart_range_angle_grid(cart_resolution=0.2384, cart_pixel_width=640, dtype=torch.float64, device='cpu'):
+def form_cart_range_angle_grid(cart_resolution=0.2384, cart_pixel_width=640, dtype=None, device='cpu'):
     # Compute the range (m) and angle (rad) value of each cartesian pixel
     # A pixels coordinates are the center of the pixel
     # If even number of pixels, 0 m coordinate falls on edges of pixels (hence the -0.5)
@@ -437,7 +382,10 @@ def form_cart_range_angle_grid(cart_resolution=0.2384, cart_pixel_width=640, dty
         cart_min_range = cart_pixel_width / 2 * cart_resolution
     
     # Compute the value of each cartesian pixel, centered at 0
-    coords = torch.linspace(-cart_min_range, cart_min_range, cart_pixel_width, dtype=dtype, device=device)
+    if dtype is None:
+        coords = torch.linspace(-cart_min_range, cart_min_range, cart_pixel_width, device=device)
+    else:
+        coords = torch.linspace(-cart_min_range, cart_min_range, cart_pixel_width, dtype=dtype, device=device)
     Y, X = torch.meshgrid(coords, -1 * coords, indexing='xy')
     sample_range = torch.sqrt(Y * Y + X * X)
     sample_angle = torch.arctan2(Y, X)
@@ -445,7 +393,7 @@ def form_cart_range_angle_grid(cart_resolution=0.2384, cart_pixel_width=640, dty
 
     return sample_range, sample_angle
 
-def form_polar_range_grid(polar_resolution=0.2384, polar_pixel_shape=(400, 3360), dtype=torch.float64, device='cpu'):
+def form_polar_range_grid(polar_resolution=0.2384, polar_pixel_shape=(400, 3360), dtype=None, device='cpu'):
     # Compute the range (m) captured by pixels in each azimuth
     # A pixels coordinates are the center of the pixel
     # Azimuths already contain known angles camputed in polar. Also means we don't need to deal with wobble
@@ -454,7 +402,10 @@ def form_polar_range_grid(polar_resolution=0.2384, polar_pixel_shape=(400, 3360)
 
     # Compute the range value of each polar pixel
     # These values are the same for each batch item
-    range_coords = torch.linspace(0.0, polar_range, polar_pixel_shape[1], dtype=dtype, device=device)
+    if dtype is None:
+        range_coords = torch.linspace(0.0, polar_range, polar_pixel_shape[1], device=device)
+    else:
+        range_coords = torch.linspace(0.0, polar_range, polar_pixel_shape[1], dtype=dtype, device=device)
 
     # Return grid where each row is the range_coords
     range_grid = range_coords.unsqueeze(0).expand(polar_pixel_shape[0], -1)

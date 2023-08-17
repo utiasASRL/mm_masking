@@ -29,7 +29,7 @@ class ICPWeightDataset():
     def __init__(self, gt_data_dir, pc_dir, radar_dir, loc_pairs,
                  map_sensor='lidar', loc_sensor='radar',
                  random=False, num_samples=-1, verbose=False,
-                 float_type=torch.float64, use_gt=False, gt_eye=True, pos_std=1.0, rot_std=0.1,
+                 float_type=torch.float32, use_gt=False, gt_eye=True, pos_std=1.0, rot_std=0.1,
                  a_thresh=1.0, b_thresh=0.09):
         self.loc_pairs = loc_pairs
         self.float_type = float_type
@@ -280,7 +280,8 @@ class ICPWeightDataset():
         # Load in pointclouds and timestamps
         scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
-
+        
+        """
         plt.figure(figsize=(15,15))
         plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
         #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
@@ -291,6 +292,7 @@ class ICPWeightDataset():
         plt.xlim([-80, 80])
         plt.savefig('align.png')
         plt.close()
+        """
 
         # Load in fft data
         loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
