@@ -38,23 +38,23 @@ def train_policy(model, iterator, opt, loss_weights=[],
         # Zero grad
         opt.zero_grad()
 
-        with torch.cuda.amp.autocast():
-            T_pred, mask, num_non0 = model(batch_scan, batch_map, batch_T_init)
-            del batch_map, batch_T_init
+        #with torch.cuda.amp.autocast():
+        T_pred, mask, num_non0 = model(batch_scan, batch_map, batch_T_init)
+        del batch_map, batch_T_init
 
-            # Compute loss
-            batch_T_gt = batch_T['T_ml_gt'].to(device)
-            loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
-                                    icp_loss_only_iter=icp_loss_only_iter, gt_eye=gt_eye, epoch=epoch)
-            del batch_T_gt, mask, T_pred, batch_scan
+        # Compute loss
+        batch_T_gt = batch_T['T_ml_gt'].to(device)
+        loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
+                                icp_loss_only_iter=icp_loss_only_iter, gt_eye=gt_eye, epoch=epoch)
+        del batch_T_gt, mask, T_pred, batch_scan
         # Compute the derivatives
-        scaler.scale(loss).backward()
-        #loss.backward()
+        #scaler.scale(loss).backward()
+        loss.backward()
 
         # Take step
-        scaler.step(opt)
-        scaler.update()
-        #opt.step()
+        #scaler.step(opt)
+        #scaler.update()
+        opt.step()
         
         loss_hist += loss.detach()
         loss_comp_hist.append(loss_comp)
@@ -108,11 +108,13 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
             if neptune_run is not None and epoch is not None and i_batch <= 10:
+                # This mask has not been passed through sigmoid, pass it through now
+                # for interpretability
                 if model.network_output_type == 'polar':
                     mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
-                    mask_0 = mask_cart[0].numpy()
+                    mask_0 = torch.sigmoid(mask_cart[0]).numpy()
                 else:
-                    mask_0 = mask[0].detach().cpu().numpy()
+                    mask_0 = torch.sigmoid(mask[0]).detach().cpu().numpy()
                 fig = plt.figure()
                 plt.imshow(mask_0, cmap='gray')
                 plt.colorbar(location='top', shrink=0.5)
@@ -336,10 +338,8 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 32,
-        "num_test": 16,
-        #"num_train": 1,
-        #"num_test": 1,
+        "num_train": 1,
+        "num_test": 1,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
@@ -353,14 +353,13 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 8,
-        #"batch_size": 1,
-        "shuffle": True,
+        "batch_size": 1,
+        "shuffle": False,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 100,
-        "learning_rate": 1e-5,#5*1e-5,
+        "num_epochs": 1000,
+        "learning_rate": 1e-3,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -447,8 +446,8 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
-    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=False)
+    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=False)
     print("Dataloader created")
 
     # Initialize policy

@@ -37,6 +37,11 @@ class ICPWeightDataset():
         self.loc_sensor = loc_sensor
         self.gt_eye = gt_eye
 
+        # Load in ICP to get target padding value
+        config_path = '../external/dICP/config/dICP_config.yaml'
+        temp_ICP_alg = ICP(icp_type='pt2pt', config_path=config_path,)
+        self.target_pad_val = temp_ICP_alg.target_pad_val
+
         if not random:
             np.random.seed(99)
             torch.manual_seed(99)
@@ -337,7 +342,7 @@ class ICPWeightDataset():
         map_pts_sensor_frame, map_norms_sensor_frame = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_ml_gt, return_aligned=self.gt_eye)
 
         # Make map_pc batchable
-        map_pc_pad = torch.zeros((self.max_map_pts - map_pts_sensor_frame.shape[0], 3), dtype=self.float_type)
+        map_pc_pad = self.target_pad_val*torch.ones((self.max_map_pts - map_pts_sensor_frame.shape[0], 3), dtype=self.float_type)
         map_pts_pc = torch.cat((map_pts_sensor_frame, map_pc_pad), dim=0)
         map_norms_pc = torch.cat((map_norms_sensor_frame, map_pc_pad), dim=0)
         map_pc = torch.cat((map_pts_pc, map_norms_pc), dim=1)
