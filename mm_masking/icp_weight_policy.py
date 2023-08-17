@@ -25,7 +25,7 @@ class LearnICPWeightPolicy(nn.Module):
     def __init__(self, icp_type='pt2pl', network_inputs={'fft': True, 'cfar': True, 'range': True},
                  network_input_type='cartesian', 
                  network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
-                 float_type=torch.float64, device='cpu', init_weights=True,
+                 float_type=torch.float32, device='cpu', init_weights=True,
                  normalize_type=[], log_transform=False,
                  a_threshold=0.7, b_threshold=0.09, use_icp=True, gt_eye=True, max_iter=25):
         super().__init__()
@@ -35,7 +35,7 @@ class LearnICPWeightPolicy(nn.Module):
 
         config_path = '../external/dICP/config/dICP_config.yaml'
         self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-4)
-        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=500, tolerance=1e-4)
+        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=2, tolerance=1e-4)
         self.float_type = float_type
         self.device = device
         self.network_inputs = network_inputs
@@ -77,9 +77,10 @@ class LearnICPWeightPolicy(nn.Module):
                 for i in range(len(dec_channels) - 1)])
 
         self.final_layer = nn.Sequential(
-            nn.Conv2d(dec_channels[-1], 1, kernel_size=1),
-            nn.Sigmoid()
+            nn.Conv2d(dec_channels[-1], 1, kernel_size=1)
         )
+
+        self.sigmoid_layer = nn.Sigmoid()
 
         if init_weights:
             self.apply(weights_init)
@@ -173,22 +174,24 @@ class LearnICPWeightPolicy(nn.Module):
                 input_data = decoder_layer(input_data)
 
             mask = self.final_layer(input_data).squeeze(1)
+            weight_mask = self.sigmoid_layer(mask)
 
             del input_data, enc_layers, bi_upsample, bi_w, bi_h, skip_con
             torch.cuda.empty_cache()
         else:
             mask = override_mask
+            weight_mask = override_mask
             # Make sure override mask matches self.network_input
             if mask.shape == fft_data.shape and self.network_input_type == 'cartesian':
-                mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
+                weight_mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
             elif mask.shape != fft_data.shape and self.network_input_type == 'polar':
-                mask = radar_cartesian_to_polar(mask, azimuths, self.res)
+                weight_mask = radar_cartesian_to_polar(mask, azimuths, self.res)
 
         if binary:
-            mask = torch.where(mask > 0.5, 1.0, 0.0)
+            weight_mask = torch.where(weight_mask > 0.5, 1.0, 0.0)
 
         # Extract weights correcponding to scan_pc
-        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(mask, scan_pc_raw)
+        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(weight_mask, scan_pc_raw)
 
         # Save params
         self.mean_num_pts = mean_num_non0
@@ -204,7 +207,7 @@ class LearnICPWeightPolicy(nn.Module):
         del fft_data, fft_cfar, fft_weights
         torch.cuda.empty_cache()
 
-        if neptune_run is not None:
+        if neptune_run is not None and batch_idx <= 10:
             # Plot the scan and map pointclouds
             map_pc_0 = map_pc[0].detach().cpu().numpy()
             # Only use map_pc_0 that are less than self.ICP_alg.target_pad_val

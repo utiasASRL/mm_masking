@@ -131,6 +131,8 @@ class ICPWeightDataset():
                 
                 # Extract vertex info
                 map_v = g_utils.get_closest_teach_vertex(loc_v)
+                map_ptr = map_v.get_data("pointmap_ptr")
+                map_v = pair_graph.get_vertex(map_ptr.map_vid)
 
                 # Extract timestamps
                 loc_stamp = int(loc_v.stamp * 1e-3)
@@ -185,6 +187,21 @@ class ICPWeightDataset():
                     map_norms_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_norms.T).T
                     map_pts, map_norms = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_gt_idx)
                     
+
+                    # Plot for visualization
+                    """
+                    map_pts_loc_frame = (T_gt_idx[:3,:3] @ map_pts_sensor_frame[:,:3].T + T_gt_idx[:3, 3:4]).T
+                    plt.figure(figsize=(15,15))
+                    plt.scatter(map_pts_loc_frame[:,0], map_pts_loc_frame[:,1], s=1.0, c='red')
+                    plt.scatter(curr_filt_pts[:,0], curr_filt_pts[:,1], s=0.5, c='blue')
+                    plt.ylim([-80, 80])
+                    plt.xlim([-80, 80])
+                    plt.savefig('align.png')
+                    plt.close()
+                    time.sleep(0.1)
+                    """
+
+
                     if curr_raw_pts.shape[0] > local_max_loc_pts:
                         local_max_loc_pts = curr_raw_pts.shape[0]
                     if map_pts.shape[0] > local_max_map_pts:
@@ -263,20 +280,17 @@ class ICPWeightDataset():
         # Load in pointclouds and timestamps
         scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
-        """
-        map_pts_curr_frame = (T_ml_gt[:3,:3] @ map_pc[:,:3].T + T_ml_gt[:3,3].unsqueeze(1)).T
+
         plt.figure(figsize=(15,15))
-        plt.scatter(map_pts_curr_frame[:,0], map_pts_curr_frame[:,1], s=1.0, c='red')
+        plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
         #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
-        plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='blue')
+        plt.scatter(scan_pc_filt[:,0], scan_pc_filt[:,1], s=0.5, c='blue')
         # plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='green')
         #plt.scatter(curr_pts_map_frame[:,0], curr_pts_map_frame[:,1], s=0.5, c='green')
         plt.ylim([-80, 80])
         plt.xlim([-80, 80])
         plt.savefig('align.png')
         plt.close()
-        adfsdsfd
-        """
 
         # Load in fft data
         loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)

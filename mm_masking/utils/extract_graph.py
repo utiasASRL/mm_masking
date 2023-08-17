@@ -1,9 +1,7 @@
 from matplotlib import pyplot as plt
 import numpy as np
 from vtr_pose_graph.graph import Graph
-from vtr_pose_graph.graph_iterators import DepthFirstSearchIterator
 from vtr_pose_graph.vertex import Vertex
-
 import vtr_pose_graph.graph_utils as g_utils
 from sensor_msgs_py.point_cloud2 import read_points
 from pylgmath import Transformation

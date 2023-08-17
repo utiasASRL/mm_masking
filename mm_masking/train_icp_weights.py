@@ -18,6 +18,8 @@ import torch.nn as nn
 from radar_utils import radar_polar_to_cartesian_diff
 
 
+scaler = torch.cuda.amp.GradScaler()
+
 def train_policy(model, iterator, opt, loss_weights=[],
                  device='cpu', neptune_run=None, epoch=None, clip_value=0.0,
                  icp_loss_only_iter=0, gt_eye=True):
@@ -38,16 +40,19 @@ def train_policy(model, iterator, opt, loss_weights=[],
 
         # Zero grad
         opt.zero_grad()
-        T_pred, mask, num_non0 = model(batch_scan, batch_map, batch_T_init)
-        del batch_map, batch_T_init
 
-        # Compute loss
-        batch_T_gt = batch_T['T_ml_gt'].to(device)
-        loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
-                                  icp_loss_only_iter=icp_loss_only_iter, gt_eye=True, epoch=epoch)
-        del batch_T_gt, mask, T_pred, batch_scan
+        with torch.cuda.amp.autocast():
+            T_pred, mask, num_non0 = model(batch_scan, batch_map, batch_T_init)
+            del batch_map, batch_T_init
+
+            # Compute loss
+            batch_T_gt = batch_T['T_ml_gt'].to(device)
+            loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
+                                    icp_loss_only_iter=icp_loss_only_iter, gt_eye=True, epoch=epoch)
+            del batch_T_gt, mask, T_pred, batch_scan
         # Compute the derivatives
-        loss.backward()
+        scaler.scale(loss).backward()
+        #loss.backward()
 
         if clip_value > 0.0:
             #nn.utils.clip_grad_value_(model.parameters(), clip_value=clip_value)
@@ -71,7 +76,9 @@ def train_policy(model, iterator, opt, loss_weights=[],
             final_layer_norm.append(layer_norm)
         
         # Take step
-        opt.step()
+        scaler.step(opt)
+        scaler.update()
+        #opt.step()
         
         loss = loss.detach().cpu().numpy()
         loss_hist.append(loss)
@@ -99,6 +106,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
 
     with torch.no_grad():
         for i_batch, batch in enumerate(iterator):
+            print("Batch: ", i_batch)
             # Load in data
             batch_scan = batch['loc_data']
             batch_map = batch['map_data']
@@ -125,7 +133,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
             val_acc_list.append(val_acc)
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
-            if neptune_run is not None and epoch is not None:
+            if neptune_run is not None and epoch is not None and i_batch <= 10:
                 if model.network_output_type == 'polar':
                     mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
                     mask_0 = mask_cart[0].numpy()
@@ -184,7 +192,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', verbose=False, b
 
 def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=[],
                        icp_loss_only_iter=0, gt_eye=True, epoch=0):
-    mask_criterion = torch.nn.BCELoss()
+    mask_criterion = torch.nn.BCEWithLogitsLoss()
     loss_rot = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
     loss_trans = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
     loss_fft = torch.zeros(1, dtype=T_pred.dtype, device=T_pred.device)
@@ -290,6 +298,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
 
     with torch.no_grad():
         for i_batch, batch in enumerate(iterator):
+            print("Batch: ", i_batch)
             # Load in data
             batch_scan = batch['loc_data']
             batch_map = batch['map_data']
@@ -348,7 +357,7 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="debug"
+        mode="async"
     )
 
     params = {
@@ -356,29 +365,29 @@ def main(args):
 
         # Dataset params
         "num_train": -1,
-        "num_test": -1,
+        "num_test": 256,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
         "pos_std": 2.0,             # Standard deviation of position initial guess
         "rot_std": 0.3,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
-        "map_sensor": "radar",
+        "map_sensor": "lidar",
         "loc_sensor": "radar",
         "log_transform": False,      # True or false for log transform of fft data
         "normalize": ["minmax"],  # Options are "minmax", "standardize", and none
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 8,
-        "shuffle": False,
+        "batch_size": 16,
+        "shuffle": True,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 1000,
-        "learning_rate": 1e-4,#5*1e-5,
+        "num_epochs": 100,
+        "learning_rate": 1e-5,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
-        "dropout": 0.01,   # Dropout rate, set 0 for no dropout
+        "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
         "init_weights": True, # True or false for manually initializing weights
         "clip_value": 0.0, # Value to clip gradients at, set 0 for no clipping
@@ -390,7 +399,7 @@ def main(args):
         "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
+        "loss_cfar_mask_weight": 0.1, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
@@ -416,9 +425,10 @@ def main(args):
     network_inputs = {"fft": params["fft_input"], "cfar": params["cfar_input"], "range": params["range_input"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
-    train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
-    #train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-02-09-12-55"]]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
+    train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"],]
+                       #["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"],
+                       #["boreas-2020-11-26-13-58", "boreas-2021-03-09-14-23"]]
+    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-02-09-12-55"]]
 
     tic = time.time()
     train_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
@@ -463,8 +473,8 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=8)
-    validation_iterator = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=8)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
+    validation_iterator = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
     print("Dataloader created")
 
     # Initialize policy
