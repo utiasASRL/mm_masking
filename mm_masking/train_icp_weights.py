@@ -108,13 +108,11 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
             if neptune_run is not None and epoch is not None and i_batch <= 10:
-                # This mask has not been passed through sigmoid, pass it through now
-                # for interpretability
                 if model.network_output_type == 'polar':
                     mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
-                    mask_0 = torch.sigmoid(mask_cart[0]).numpy()
+                    mask_0 = mask_cart[0].numpy()
                 else:
-                    mask_0 = torch.sigmoid(mask[0]).detach().cpu().numpy()
+                    mask_0 = mask[0].detach().cpu().numpy()
                 fig = plt.figure()
                 plt.imshow(mask_0, cmap='gray')
                 plt.colorbar(location='top', shrink=0.5)
@@ -168,7 +166,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
 
 def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=[],
                        icp_loss_only_iter=0, gt_eye=True, epoch=0):
-    mask_criterion = torch.nn.BCEWithLogitsLoss()
+    mask_criterion = torch.nn.BCELoss()
     loss_rot = torch.zeros(1, device=T_pred.device)
     loss_trans = torch.zeros(1, device=T_pred.device)
     loss_fft = torch.zeros(1, device=T_pred.device)
@@ -331,15 +329,17 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="async"
+        mode="debug"
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 1,
-        "num_test": 1,
+        "num_train": 24,
+        "num_val": 24,
+        "augment_factor": 1,        # Factor by which to augment dataset, this will
+                                    # increase the number of train samples
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
@@ -353,7 +353,7 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 1,
+        "batch_size": 8,
         "shuffle": False,
 
         # Training params
@@ -371,9 +371,9 @@ def main(args):
         # Choose weights for loss function
         "loss_icp_rot_weight": 1.0, # Weight for icp rotation error loss
         "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
-        "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
+        "loss_fft_mask_weight": 0.3, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.1, # Weight for cfar mask loss
+        "loss_cfar_mask_weight": 0.0, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
@@ -383,6 +383,7 @@ def main(args):
         "network_input_type": "cartesian", # Options are "cartesian" and "polar", what the network takes in
         "network_output_type": "cartesian", # Options are "cartesian" and "polar"
         "binary_inference": False, # Options are True and False, whether the mask is binary or not during inference
+        "norm_weights": True, # Options are True and False, whether to normalize weights to always have max weight of 1
         # Choose inputs to network
         "fft_input": True,
         "cfar_input": False,
@@ -395,7 +396,6 @@ def main(args):
                     "fft": params["loss_fft_mask_weight"],
                     "mask_pts": params["loss_fft_mask_weight"], "cfar": params["loss_cfar_mask_weight"],
                     "num_pts": params["num_pts_weight"]}
-    network_inputs = {"fft": params["fft_input"], "cfar": params["cfar_input"], "range": params["range_input"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"],]
@@ -404,39 +404,11 @@ def main(args):
     val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
 
     tic = time.time()
-    train_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
-                                        pc_dir=args.pc_dir,
-                                        radar_dir=args.radar_dir,
-                                        loc_pairs=train_loc_pairs,
-                                        map_sensor=params["map_sensor"],
-                                        loc_sensor=params["loc_sensor"],
-                                        random=params["random"],
-                                        num_samples=params["num_train"],
-                                        float_type=params["float_type"],
-                                        use_gt=params["use_gt"],
-                                        gt_eye=params["gt_eye"],
-                                        pos_std=params["pos_std"],
-                                        rot_std=params["rot_std"],
-                                        a_thresh=params["a_thresh"],
-                                        b_thresh=params["b_thresh"])
+    train_dataset = ICPWeightDataset(loc_pairs=train_loc_pairs, params=params, dataset_type='train')
     toc = time.time()
     print("Time to load train dataset: ", toc-tic)
     tic = time.time()
-    test_dataset = ICPWeightDataset(gt_data_dir=args.gt_data_dir,
-                                        pc_dir=args.pc_dir,
-                                        radar_dir=args.radar_dir,
-                                        loc_pairs=val_loc_pairs,
-                                        map_sensor=params["map_sensor"],
-                                        loc_sensor=params["loc_sensor"],
-                                        random=params["random"],
-                                        num_samples=params["num_test"],
-                                        float_type=params["float_type"],
-                                        use_gt=params["use_gt"],
-                                        gt_eye=params["gt_eye"],
-                                        pos_std=params["pos_std"],
-                                        rot_std=params["rot_std"],
-                                        a_thresh=params["a_thresh"],
-                                        b_thresh=params["b_thresh"])
+    test_dataset = ICPWeightDataset(loc_pairs=val_loc_pairs, params=params, dataset_type='test')
     toc = time.time()
     print("Time to load test dataset: ", toc-tic)
     print("Dataset created")
@@ -446,26 +418,12 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=False)
-    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=False)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
+    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
     print("Dataloader created")
 
     # Initialize policy
-    use_icp = loss_weights["icp_rot"] > 0.0 or loss_weights["icp_trans"] > 0.0
-    policy = LearnICPWeightPolicy(icp_type=params["icp_type"], network_inputs=network_inputs,
-                             network_input_type=params["network_input_type"],
-                             network_output_type=params["network_output_type"],
-                             leaky=params["leaky"], dropout=params["dropout"],
-                             batch_norm=params["batch_norm"],
-                             float_type=params["float_type"], device=params["device"],
-                             init_weights=params["init_weights"],
-                             normalize_type=params["normalize"],
-                             log_transform=params["log_transform"],
-                             a_threshold=params["a_thresh"],
-                             b_threshold=params["b_thresh"],
-                             use_icp=use_icp,
-                             gt_eye=params["gt_eye"],
-                             max_iter=params["max_iter"])
+    policy = LearnICPWeightPolicy(params = params)
     policy = policy.to(device=params["device"])
 
     if params["optimizer"] == "adam":
@@ -517,7 +475,7 @@ def main(args):
         print ('EPOCH ', epoch)
 
         # Train the driving policy
-        if epoch % 10 == 0 or epoch == params["num_epochs"] - 1 or epoch == 0:
+        if epoch % 5 == 0 or epoch == params["num_epochs"] - 1 or epoch == 0:
             neptune_run = run
         else:
             neptune_run = None

@@ -26,11 +26,27 @@ import pandas as pd
 
 class ICPWeightDataset():
 
-    def __init__(self, gt_data_dir, pc_dir, radar_dir, loc_pairs,
-                 map_sensor='lidar', loc_sensor='radar',
-                 random=False, num_samples=-1, verbose=False,
-                 float_type=torch.float32, use_gt=False, gt_eye=True, pos_std=1.0, rot_std=0.1,
-                 a_thresh=1.0, b_thresh=0.09):
+    def __init__(self, loc_pairs, params=None, dataset_type='train'):
+
+        # Load in params
+        map_sensor=params["map_sensor"]
+        loc_sensor=params["loc_sensor"]
+        random=params["random"]
+        if dataset_type == 'train':
+            num_samples=params["num_train"]
+            augment_factor = params["augment_factor"]
+        else:
+            num_samples=params["num_val"]
+            augment_factor = 1
+        
+        float_type=params["float_type"]
+        use_gt=params["use_gt"]
+        gt_eye=params["gt_eye"]
+        pos_std=params["pos_std"]
+        rot_std=params["rot_std"]
+        a_thresh=params["a_thresh"]
+        b_thresh=params["b_thresh"]
+
         self.loc_pairs = loc_pairs
         self.float_type = float_type
         self.map_sensor = map_sensor
@@ -124,7 +140,7 @@ class ICPWeightDataset():
                     self.max_loc_pts = pair_df['max_loc'][0]
                 if pair_df['max_map'][0] > self.max_map_pts:
                     self.max_map_pts = pair_df['max_map'][0]
-            print(extract_pcs_metadata)
+            print("Loading from metadata: " + str(extract_pcs_metadata))
             ii = -1
             local_max_loc_pts = 0
             local_max_map_pts = 0

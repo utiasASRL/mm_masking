@@ -22,16 +22,28 @@ def weights_init(m):
             print("Skipping initialization of ", classname)
 
 class LearnICPWeightPolicy(nn.Module):
-    def __init__(self, icp_type='pt2pl', network_inputs={'fft': True, 'cfar': True, 'range': True},
-                 network_input_type='cartesian', 
-                 network_output_type='cartesian', leaky=False, dropout=0.0, batch_norm=False,
-                 float_type=torch.float32, device='cpu', init_weights=True,
-                 normalize_type=[], log_transform=False,
-                 a_threshold=0.7, b_threshold=0.09, use_icp=True, gt_eye=True, max_iter=25):
+    def __init__(self, params):
         super().__init__()
 
         # Define constant params (need to move to config file)
         self.res = 0.0596   # This is the old resolution!
+
+        icp_type=params["icp_type"]
+        network_inputs = {"fft": params["fft_input"], "cfar": params["cfar_input"], "range": params["range_input"]}
+        network_input_type=params["network_input_type"]
+        network_output_type=params["network_output_type"]
+        leaky=params["leaky"]
+        dropout=params["dropout"]
+        batch_norm=params["batch_norm"]
+        float_type=params["float_type"]
+        device=params["device"]
+        init_weights=params["init_weights"]
+        normalize_type=params["normalize"]
+        log_transform=params["log_transform"]
+        a_threshold=params["a_thresh"]
+        b_threshold=params["b_thresh"]
+        gt_eye=params["gt_eye"]
+        max_iter=params["max_iter"]
 
         config_path = '../external/dICP/config/dICP_config.yaml'
         self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
@@ -53,8 +65,8 @@ class LearnICPWeightPolicy(nn.Module):
         self.log_transform = log_transform
         self.a_thres = a_threshold
         self.b_thres = b_threshold
-        self.use_icp = use_icp
         self.gt_eye = gt_eye
+        self.norm_weights = params['norm_weights']
 
         # Parameters saving
         self.mean_num_pts = 0.0
@@ -77,10 +89,9 @@ class LearnICPWeightPolicy(nn.Module):
                 for i in range(len(dec_channels) - 1)])
 
         self.final_layer = nn.Sequential(
-            nn.Conv2d(dec_channels[-1], 1, kernel_size=1)
+            nn.Conv2d(dec_channels[-1], 1, kernel_size=1),
+            nn.Sigmoid()
         )
-
-        self.sigmoid_layer = nn.Sigmoid()
 
         if init_weights:
             self.apply(weights_init)
@@ -173,19 +184,21 @@ class LearnICPWeightPolicy(nn.Module):
                 # Pass through decoder again
                 input_data = decoder_layer(input_data)
 
-            mask = self.final_layer(input_data).squeeze(1)
-            weight_mask = self.sigmoid_layer(mask)
+            weight_mask = self.final_layer(input_data).squeeze(1)
 
             del input_data, enc_layers, bi_upsample, bi_w, bi_h, skip_con
             torch.cuda.empty_cache()
         else:
-            mask = override_mask
             weight_mask = override_mask
             # Make sure override mask matches self.network_input
-            if mask.shape == fft_data.shape and self.network_input_type == 'cartesian':
-                weight_mask = radar_polar_to_cartesian_diff(mask, azimuths, self.res)
-            elif mask.shape != fft_data.shape and self.network_input_type == 'polar':
-                weight_mask = radar_cartesian_to_polar(mask, azimuths, self.res)
+            if weight_mask.shape == fft_data.shape and self.network_input_type == 'cartesian':
+                weight_mask = radar_polar_to_cartesian_diff(weight_mask, azimuths, self.res)
+            elif weight_mask.shape != fft_data.shape and self.network_input_type == 'polar':
+                weight_mask = radar_cartesian_to_polar(weight_mask, azimuths, self.res)
+
+        # Normalize weights
+        if self.norm_weights:
+            weight_mask = weight_mask / torch.amax(weight_mask, dim=(1,2), keepdim=True)
 
         if binary:
             weight_mask = torch.where(weight_mask > 0.5, 1.0, 0.0)
@@ -216,6 +229,8 @@ class LearnICPWeightPolicy(nn.Module):
             # Only use scan_pc_0 points that aren't exactly 0
             scan_w_0 = weights[0].detach().cpu().numpy()
             scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
+            # Normalize scan_w_0 since weights are relative
+            scan_w_0 = scan_w_0 / np.max(scan_w_0)
             scan_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) > 0.05]
 
             # Also isolate the points for which weight is above 0.01
@@ -246,12 +261,9 @@ class LearnICPWeightPolicy(nn.Module):
         # Pass the modified fft_data through ICP
         del scan_pc_raw
         scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
-        if self.use_icp > 0.0:
-            T_est = self.icp(scan_pc_filt, map_pc, T_init, weights)
-        else:
-            T_est = T_init
+        T_est = self.icp(scan_pc_filt, map_pc, T_init, weights)
 
-        return T_est, mask, diff_mean_num_non0
+        return T_est, weight_mask, diff_mean_num_non0
     
     def icp(self, scan_pc, map_pc, T_init, weights):
         loss_fn = {"name": "cauchy", "metric": 1.0}
