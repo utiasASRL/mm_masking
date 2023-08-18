@@ -246,7 +246,8 @@ def eval_validation_loss(T_pred, batch_T_gt, gt_eye=True):
     # Extract xi components
     xi_r = xi_wedge[:, 0:2, 3]
     xi_theta = xi_wedge[:, 1, 0].unsqueeze(-1)
-    norm_err = torch.norm(xi_wedge, dim=1).mean()
+    xi_stack = torch.cat((xi_theta, xi_r), dim=1)
+    norm_err = torch.norm(xi_stack, dim=1).mean()
     rot_err = torch.norm(xi_theta, dim=1).mean()
     trans_err = torch.norm(xi_r, dim=1).mean()
 
@@ -359,7 +360,7 @@ def main(args):
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 1e-3,#5*1e-5,
+        "learning_rate": 1e-5,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -377,7 +378,7 @@ def main(args):
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
-        "max_iter": 1, # Maximum number of iterations for icp
+        "max_iter": 8, # Maximum number of iterations for icp
 
         # Model setup
         "network_input_type": "cartesian", # Options are "cartesian" and "polar", what the network takes in
@@ -398,11 +399,18 @@ def main(args):
                     "num_pts": params["num_pts_weight"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
-    train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"],]
-                       #["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"],
-                       #["boreas-2020-11-26-13-58", "boreas-2021-03-09-14-23"]]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-04-14-00"]]
+    """
+    train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-01-13-26"],
+                      ["boreas-2020-11-26-13-58", "boreas-2021-03-30-14-23"],
+                      ["boreas-2020-11-26-13-58", "boreas-2021-04-29-15-55"]]
+    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"]]
+    """
+    train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
 
+    val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-05-06-13-19']]
+    
     tic = time.time()
     train_dataset = ICPWeightDataset(loc_pairs=train_loc_pairs, params=params, dataset_type='train')
     toc = time.time()
