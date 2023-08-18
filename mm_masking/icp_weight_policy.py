@@ -226,7 +226,7 @@ class LearnICPWeightPolicy(nn.Module):
 
             fig = plt.figure()
             plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=1.0, c='r')
-            plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='b', alpha=scan_w_0)
+            plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='b', alpha=scan_w_0/max(scan_w_0))
             plt.legend(['map', 'scan'])
             plt.title("Pointclouds")
             neptune_run["extracted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
