@@ -123,8 +123,6 @@ class LearnICPWeightPolicy(nn.Module):
         # If override_mask is not None, then don't use network to get mask, just use override_mask
         # Extract points
         fft_data = batch_scan['fft_data'].to(self.device)#.requires_grad_(True)
-        azimuths = batch_scan['azimuths'].to(self.device)
-        #az_timestamps = batch_scan['az_timestamps'].to(self.device)
         fft_cfar = batch_scan['fft_cfar'].to(self.device)
         scan_pc_raw = batch_scan['raw_pc'].to(self.device)
         #map_pc_paths = batch_map['pc_path']
@@ -138,10 +136,8 @@ class LearnICPWeightPolicy(nn.Module):
             input_data = None
             # Convert input data to desired network input
             if self.network_inputs['fft']:
-                if self.network_input_type == 'polar':
-                    input_data = fft_data.unsqueeze(1)
-                elif self.network_input_type == 'cartesian':
-                    input_data = radar_polar_to_cartesian_diff(fft_data, azimuths, self.res).unsqueeze(1)
+                # FFT image is already in polar or cartesian
+                input_data = fft_data.unsqueeze(1)
             if self.network_inputs['cfar']:
                 # CFAR image is already in polar or cartesian
                 input_data = torch.cat([input_data, fft_cfar.unsqueeze(1)], dim=1)
@@ -190,11 +186,6 @@ class LearnICPWeightPolicy(nn.Module):
             torch.cuda.empty_cache()
         else:
             weight_mask = override_mask
-            # Make sure override mask matches self.network_input
-            if weight_mask.shape == fft_data.shape and self.network_input_type == 'cartesian':
-                weight_mask = radar_polar_to_cartesian_diff(weight_mask, azimuths, self.res)
-            elif weight_mask.shape != fft_data.shape and self.network_input_type == 'polar':
-                weight_mask = radar_cartesian_to_polar(weight_mask, azimuths, self.res)
 
         # Normalize weights
         if self.norm_weights:

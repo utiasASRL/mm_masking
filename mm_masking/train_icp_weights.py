@@ -108,11 +108,11 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
 
             # Save first mask from this batch to neptune with name "learned_mask_#i_batch"
             if neptune_run is not None and epoch is not None and i_batch <= 10:
-                if model.network_output_type == 'polar':
-                    mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
-                    mask_0 = mask_cart[0].numpy()
-                else:
-                    mask_0 = mask[0].detach().cpu().numpy()
+                #if model.network_output_type == 'polar':
+                #    mask_cart = radar_polar_to_cartesian_diff(mask.detach().cpu(), batch_scan['azimuths'], model.res)
+                #    mask_0 = mask_cart[0].numpy()
+                #else:
+                mask_0 = mask[0].detach().cpu().numpy()
                 fig = plt.figure()
                 plt.imshow(mask_0, cmap='gray')
                 plt.colorbar(location='top', shrink=0.5)
@@ -123,20 +123,23 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
                 if epoch == -1:
                     fft_data = batch_scan['fft_data']
                     cfar_data = batch_scan['fft_cfar']
-                    mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
-                    fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
-                    bev_data = radar_polar_to_cartesian_diff(fft_data, batch_scan['azimuths'], model.res)
-                    bev_fft_mask_data = radar_polar_to_cartesian_diff(fft_mask, batch_scan['azimuths'], model.res)
+                    #mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
+                    #fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
+                    #bev_data = radar_polar_to_cartesian_diff(fft_data, batch_scan['azimuths'], model.res)
+                    bev_data = fft_data
+                    #bev_fft_mask_data = radar_polar_to_cartesian_diff(fft_mask, batch_scan['azimuths'], model.res)
+                    mean_bev_scan = torch.mean(bev_data, dim=(1,2), keepdim=True)
+                    bev_fft_mask_data = torch.where(bev_data > 3.0*mean_bev_scan, torch.ones_like(bev_data), torch.zeros_like(bev_data))
                     scan_0 = fft_data[0].numpy()
                     bev_scan_0 = bev_data[0].numpy()
                     cfar_data_0 = cfar_data[0].numpy()
                     bev_fft_mask_0 = bev_fft_mask_data[0].numpy()
 
-                    fig = plt.figure()
-                    plt.imshow(scan_0, cmap='gray')
-                    plt.colorbar(location='top', shrink=0.5)
-                    neptune_run["raw_scan"].append(fig, name=("Polar Scan 0, batch " + str(i_batch)))
-                    plt.close()
+                    #fig = plt.figure()
+                    #plt.imshow(scan_0, cmap='gray')
+                    #plt.colorbar(location='top', shrink=0.5)
+                    #neptune_run["raw_scan"].append(fig, name=("Polar Scan 0, batch " + str(i_batch)))
+                    #plt.close()
 
                     fig = plt.figure()
                     plt.imshow(bev_scan_0, cmap='gray')
@@ -193,12 +196,13 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         if loss_weights['fft'] > 0.0:
             # Find mean value of each fft azimuth
             fft_data = batch_scan['fft_data'].to(mask.device)
-            mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
+            #mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
+            mean_azimuth = torch.mean(fft_data, dim=(1,2), keepdim=True)
             fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
 
-            if model.network_output_type == "cartesian":
-                azimuths = batch_scan['azimuths'].to(mask.device)
-                fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
+            #if model.network_output_type == "cartesian":
+            #    azimuths = batch_scan['azimuths'].to(mask.device)
+            #    fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
 
             loss_fft = mask_criterion(mask, fft_mask)
         # Compute CFAR mask loss
@@ -255,7 +259,6 @@ def eval_validation_loss(T_pred, batch_T_gt, gt_eye=True):
     tot_err = torch.hstack((norm_err, rot_err, trans_err))
 
     return tot_err
-    
 
 def generate_baseline(model, iterator, baseline_type="train", device='cpu',
                       loss_weights={'icp': 1.0, 'fft': 0.0, 'mask_pts': 0.0, 'cfar': 0.0},
@@ -288,12 +291,12 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
             elif loss_weights['fft'] > 0.0:
                 # Find mean value of each fft azimuth
                 fft_data = batch_scan['fft_data'].to(device)
-                mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
+                #mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
+                mean_azimuth = torch.mean(fft_data, dim=(1,2), keepdim=True)
                 fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
-
-                if model.network_input_type == "cartesian":
-                    azimuths = batch_scan['azimuths'].to(device)
-                    fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
+                #if model.network_input_type == "cartesian":
+                #    azimuths = batch_scan['azimuths'].to(device)
+                #    fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
                 ones_mask = fft_mask
             else:
                 ones_mask = torch.ones_like(fft_data)
@@ -330,15 +333,15 @@ def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
         api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
-        mode="debug"
+        mode="async"
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 24,
-        "num_val": 24,
+        "num_train": 16,
+        "num_val": 16,
         "augment_factor": 1,        # Factor by which to augment dataset, this will
                                     # increase the number of train samples
         "random": False,
@@ -399,18 +402,20 @@ def main(args):
                     "num_pts": params["num_pts_weight"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
+    train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
+    val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
     """
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-01-13-26"],
                       ["boreas-2020-11-26-13-58", "boreas-2021-03-30-14-23"],
                       ["boreas-2020-11-26-13-58", "boreas-2021-04-29-15-55"]]
     val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"]]
-    """
+    
     train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
 
     val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-05-06-13-19']]
-    
+    """
     tic = time.time()
     train_dataset = ICPWeightDataset(loc_pairs=train_loc_pairs, params=params, dataset_type='train')
     toc = time.time()

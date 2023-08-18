@@ -46,12 +46,14 @@ class ICPWeightDataset():
         rot_std=params["rot_std"]
         a_thresh=params["a_thresh"]
         b_thresh=params["b_thresh"]
+        network_input_type = params["network_input_type"]
 
         self.loc_pairs = loc_pairs
         self.float_type = float_type
         self.map_sensor = map_sensor
         self.loc_sensor = loc_sensor
         self.gt_eye = gt_eye
+        self.network_input_type = network_input_type
 
         # Load in ICP to get target padding value
         config_path = '../external/dICP/config/dICP_config.yaml'
@@ -76,10 +78,11 @@ class ICPWeightDataset():
         dataset_dir = osp.join(data_dir, 'vtr_data')
         vtr_result_dir = osp.join(data_dir, 'vtr_results')
         polar_res = 0.0596
-        network_input_type = 'cartesian'
+        
 
         self.v_id_vector = None
         self.graph_id_vector = None
+        self.augment_id_vector = None
         self.T_loc_gt = None
         self.T_loc_init = None
         self.T_map_sensor_robot = []
@@ -141,11 +144,9 @@ class ICPWeightDataset():
                 if pair_df['max_map'][0] > self.max_map_pts:
                     self.max_map_pts = pair_df['max_map'][0]
             print("Loading from metadata: " + str(extract_pcs_metadata))
-            ii = -1
             local_max_loc_pts = 0
             local_max_map_pts = 0
-            for loc_v, e in TemporalIterator(v_start):
-                ii += 1
+            for ii, (loc_v, e) in enumerate(TemporalIterator(v_start)):
                 # Check if vertex is valid
                 if e.from_id == vtr_pose_graph.INVALID_ID:
                     continue
@@ -160,10 +161,13 @@ class ICPWeightDataset():
                 map_stamp = int(map_v.stamp * 1e-3)
 
                 # Ensure radar image exists
-                loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
+                loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
+                if network_input_type == 'cartesian':
+                    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + '.png')
+                else:
+                    loc_radar_path = loc_radar_fft_path
                 if not osp.exists(loc_radar_path):
                     continue
-                self.loc_radar_path_list.append(loc_radar_path)
 
                 # Ensure CFAR of image exists, if it does not, create one
                 # This is done to speed up training so that CFAR image does not need to be created every time
@@ -172,7 +176,7 @@ class ICPWeightDataset():
                     os.makedirs(cfar_dir)
                 loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + '.png')
                 if not osp.exists(loc_cfar_path):
-                    loc_radar_img = cv2.imread(loc_radar_path, cv2.IMREAD_GRAYSCALE)
+                    loc_radar_img = cv2.imread(loc_radar_fft_path, cv2.IMREAD_GRAYSCALE)
                     fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
                     fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
                     azimuths = torch.tensor(azimuths, dtype=self.float_type).unsqueeze(0)
@@ -183,8 +187,6 @@ class ICPWeightDataset():
                     if network_input_type == 'cartesian':
                         fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, polar_res)
                     cv2.imwrite(loc_cfar_path, 255*fft_cfar.squeeze(0).numpy())
-
-                self.loc_cfar_path_list.append(loc_cfar_path)
 
                 # Check that timestamps are matching to gt poses
                 assert loc_stamp == gt_loc_times[ii], "query: {}".format(loc_stamp)
@@ -228,46 +230,55 @@ class ICPWeightDataset():
                     if map_pts.shape[0] > local_max_map_pts:
                         local_max_map_pts = map_pts.shape[0]
 
-                # Also, generate random perturbation to ground truth pose
-                # The map pointcloud is transformed into the scan frame using T_gt
-                # T_init is the initial guess that is offset from T_gt that the ICP
-                # needs to "unlearn" to get to identity
-                if use_gt:
-                    if gt_eye:
-                        T_init_idx = np.eye(4)
+                # Now, loop through the number of augmented samples we want to generate
+                # For each sample, generate a new perturbation, and save a duplicate
+                # of the rest of the information. The __getitem__ function will deal
+                # with the actual augmentation based on the augment_id of the sample
+                for aug_id in range(augment_factor):
+                    # Generate random perturbation to ground truth pose
+                    # The map pointcloud is transformed into the scan frame using T_gt
+                    # T_init is the initial guess that is offset from T_gt that the ICP
+                    # needs to "unlearn" to get to identity
+                    if use_gt:
+                        if gt_eye:
+                            T_init_idx = np.eye(4)
+                        else:
+                            T_init_idx = gt_T_s2_s1
                     else:
-                        T_init_idx = gt_T_s2_s1
-                else:
-                    xi_rand = torch.rand((6,1), dtype=float_type)
-                    # Zero out z, pitch, and roll
-                    xi_rand[2:5] = 0.0
-                    # Scale x and y
-                    xi_rand[0:2] = pos_std*xi_rand[0:2]
-                    # Scale yaw
-                    xi_rand[5] = rot_std*xi_rand[5]
-                    T_rand = Transformation(xi_ab=xi_rand)
-                    if gt_eye:
-                        T_init_idx = T_rand.matrix() # @ identity
+                        xi_rand = torch.rand((6,1), dtype=float_type)
+                        # Zero out z, pitch, and roll
+                        xi_rand[2:5] = 0.0
+                        # Scale x and y
+                        xi_rand[0:2] = pos_std*xi_rand[0:2]
+                        # Scale yaw
+                        xi_rand[5] = rot_std*xi_rand[5]
+                        T_rand = Transformation(xi_ab=xi_rand)
+                        if gt_eye:
+                            T_init_idx = T_rand.matrix() # @ identity
+                        else:
+                            T_init_idx = T_rand.matrix() @ gt_T_s2_s1
+                    T_init_idx = torch.tensor(T_init_idx, dtype=float_type)
+
+                    # Stack data for more efficient storage and retrieval
+                    if self.v_id_vector is None:
+                        self.v_id_vector = np.array([loc_v.id])
+                        self.graph_id_vector = np.array([pair_idx])
+                        self.augment_id_vector = np.array([aug_id])
+                        self.T_loc_gt = T_gt_idx.unsqueeze(0)
+                        self.T_loc_init = T_init_idx.unsqueeze(0)
                     else:
-                        T_init_idx = T_rand.matrix() @ gt_T_s2_s1
-                T_init_idx = torch.tensor(T_init_idx, dtype=float_type)
+                        self.v_id_vector = np.append(self.v_id_vector, loc_v.id)
+                        self.graph_id_vector = np.append(self.graph_id_vector, pair_idx)
+                        self.augment_id_vector = np.append(self.augment_id_vector, aug_id)
+                        self.T_loc_gt = torch.cat((self.T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
+                        self.T_loc_init = torch.cat((self.T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
 
-                # Stack data for more efficient storage and retrieval
-                if self.v_id_vector is None:
-                    self.v_id_vector = np.array([loc_v.id])
-                    self.graph_id_vector = np.array([pair_idx])
-                    self.T_loc_gt = T_gt_idx.unsqueeze(0)
-                    self.T_loc_init = T_init_idx.unsqueeze(0)
-                else:
-                    self.v_id_vector = np.append(self.v_id_vector, loc_v.id)
-                    self.graph_id_vector = np.append(self.graph_id_vector, pair_idx)
-                    self.T_loc_gt = torch.cat((self.T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
-                    self.T_loc_init = torch.cat((self.T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
-
+                    self.loc_radar_path_list.append(loc_radar_path)
+                    self.loc_cfar_path_list.append(loc_cfar_path)
                 if (ii % 100) == 0:
-                    print(str(ii) + " samples generated")
+                    print(str(ii) + " data samples processed")
 
-                if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples:
+                if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples * augment_factor:
                     break
             
             # Update metadata if it was collected
@@ -317,16 +328,44 @@ class ICPWeightDataset():
 
         # Load in fft data
         loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
-        fft_data = torch.tensor(fft_data, dtype=self.float_type)
-        azimuths = torch.tensor(azimuths, dtype=self.float_type)
-        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+        if self.network_input_type == 'cartesian':
+            fft_data = torch.tensor(loc_radar_img, dtype=self.float_type)/255.0
+        else:
+            fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
+            fft_data = torch.tensor(fft_data, dtype=self.float_type)
+            azimuths = torch.tensor(azimuths, dtype=self.float_type)
+            az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+
         fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
         fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
 
-        loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt, 'timestamp' : loc_stamp,
-                    'fft_data' : fft_data, 'azimuths' : azimuths, 'az_timestamps' : az_timestamps,
-                    'fft_cfar' : fft_cfar}
+
+        # DELETE
+        """
+        loc_radar_fft_path = osp.join(osp.join('../data', 'vtr_data'), 'boreas-2020-12-04-14-00', 'radar', str(loc_stamp) + '.png')
+        raw_fft_data, azimuths, az_timestamps = load_radar(loc_radar_fft_path)
+        raw_fft_data = torch.tensor(raw_fft_data, dtype=self.float_type)
+        azimuths = torch.tensor(azimuths, dtype=self.float_type)
+        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+        scan_pc_list = extract_pc(scan_pc_cfar_mask, self.res, azimuths, az_timestamps)
+
+
+        
+        plt.figure(figsize=(15,15))
+        plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
+        #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
+        plt.scatter(scan_pc_filt[:,0], scan_pc_filt[:,1], s=0.5, c='blue')
+        # plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='green')
+        #plt.scatter(curr_pts_map_frame[:,0], curr_pts_map_frame[:,1], s=0.5, c='green')
+        plt.ylim([-80, 80])
+        plt.xlim([-80, 80])
+        plt.savefig('align.png')
+        plt.close()
+        """
+
+
+        loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
+                    'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
         map_data = {'pc': map_pc, 'timestamp' : map_stamp}
         T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
 
