@@ -15,7 +15,7 @@ import neptune
 from neptune_pytorch import NeptuneLogger
 from neptune.utils import stringify_unsupported
 import torch.nn as nn
-from radar_utils import radar_polar_to_cartesian_diff
+from radar_utils import radar_polar_to_cartesian_diff, extract_bev_from_pts
 
 
 scaler = torch.cuda.amp.GradScaler()
@@ -40,13 +40,13 @@ def train_policy(model, iterator, opt, loss_weights=[],
 
         #with torch.cuda.amp.autocast():
         T_pred, mask, num_non0 = model(batch_scan, batch_map, batch_T_init)
-        del batch_map, batch_T_init
+        del batch_T_init
 
         # Compute loss
         batch_T_gt = batch_T['T_ml_gt'].to(device)
-        loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights,
+        loss, loss_comp = eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, batch_map, model, loss_weights=loss_weights,
                                 icp_loss_only_iter=icp_loss_only_iter, gt_eye=gt_eye, epoch=epoch)
-        del batch_T_gt, mask, T_pred, batch_scan
+        del batch_T_gt, mask, T_pred, batch_scan, batch_map
         # Compute the derivatives
         #scaler.scale(loss).backward()
         loss.backward()
@@ -123,6 +123,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
                 if epoch == -1:
                     fft_data = batch_scan['fft_data']
                     cfar_data = batch_scan['fft_cfar']
+                    map_pts = batch_map['pc']
                     #mean_azimuth = torch.mean(fft_data, dim=2).unsqueeze(-1)
                     #fft_mask = torch.where(fft_data > 3.0*mean_azimuth, torch.ones_like(fft_data), torch.zeros_like(fft_data))
                     #bev_data = radar_polar_to_cartesian_diff(fft_data, batch_scan['azimuths'], model.res)
@@ -130,10 +131,13 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
                     #bev_fft_mask_data = radar_polar_to_cartesian_diff(fft_mask, batch_scan['azimuths'], model.res)
                     mean_bev_scan = torch.mean(bev_data, dim=(1,2), keepdim=True)
                     bev_fft_mask_data = torch.where(bev_data > 3.0*mean_bev_scan, torch.ones_like(bev_data), torch.zeros_like(bev_data))
+                    bev_map_pts_mask = extract_bev_from_pts(map_pts)
+                    
                     scan_0 = fft_data[0].numpy()
                     bev_scan_0 = bev_data[0].numpy()
                     cfar_data_0 = cfar_data[0].numpy()
                     bev_fft_mask_0 = bev_fft_mask_data[0].numpy()
+                    bev_map_pts_mask_0 = bev_map_pts_mask[0].numpy()
 
                     #fig = plt.figure()
                     #plt.imshow(scan_0, cmap='gray')
@@ -159,6 +163,12 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
                     neptune_run["raw_scan"].append(fig, name=("FFT Mask 0, batch " + str(i_batch)))
                     plt.close()
 
+                    fig = plt.figure()
+                    plt.imshow(bev_map_pts_mask_0, cmap='gray')
+                    plt.colorbar(location='top', shrink=0.5)
+                    neptune_run["raw_scan"].append(fig, name=("Map Mask 0, batch " + str(i_batch)))
+                    plt.close()
+
         mean_num_pc /= len(iterator)
         mean_w /= len(iterator)
         #print("Mean number of point clouds: ", mean_num_pc)
@@ -167,7 +177,7 @@ def validate_policy(model, iterator, gt_eye=True, device='cpu', binary=False,
 
     return val_acc, mean_num_pc, mean_w, max_w, min_w
 
-def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, loss_weights=[],
+def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, batch_map, model, loss_weights=[],
                        icp_loss_only_iter=0, gt_eye=True, epoch=0):
     mask_criterion = torch.nn.BCELoss()
     loss_rot = torch.zeros(1, device=T_pred.device)
@@ -189,9 +199,8 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         xi_theta = xi_wedge[:, 1, 0].unsqueeze(-1)
         loss_rot = torch.norm(xi_theta, dim=1).mean()
         loss_trans = torch.norm(xi_r, dim=1).mean()
-    
     if icp_loss_only_iter <= 0 or (icp_loss_only_iter > 0 and epoch < icp_loss_only_iter) or \
-        loss_weights['icp'] <= 0:
+        (loss_weights['icp_rot'] <= 0 and loss_weights['icp_trans'] <= 0):
         # Compute FFT mask loss
         if loss_weights['fft'] > 0.0:
             # Find mean value of each fft azimuth
@@ -213,7 +222,9 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
 
         # Compute mask pts loss
         if loss_weights['mask_pts'] > 0.0:
-            temp = 1
+            map_pts = batch_map['pc'].to(mask.device)
+            map_pts_mask = extract_bev_from_pts(map_pts)
+            loss_mask_pts = mask_criterion(mask, map_pts_mask)
 
         # Compute loss associated with number of points
         # This penalizes the network for ignoring too many points from those available
@@ -224,10 +235,12 @@ def eval_training_loss(T_pred, mask, num_non0, batch_T_gt, batch_scan, model, lo
         + loss_weights['fft']*loss_fft + loss_weights['mask_pts']*loss_mask_pts\
         + loss_weights['cfar']*loss_cfar + loss_weights['num_pts']*loss_num_pts
 
-    #print("Loss: ", loss.item(), " ICP: ", loss_weights['icp']*loss_icp, " FFT: ", loss_weights['fft']*loss_fft, \
-    #    " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
-    #    " Num pts: ", loss_weights['num_pts']*loss_num_pts)
-
+    """
+    print("Loss: ", loss.item(), " ICP rot: ", loss_weights['icp_rot']*loss_rot, " ICP trans: ", loss_weights['icp_trans']*loss_trans, \
+          " FFT: ", loss_weights['fft']*loss_fft, \
+        " Mask: ", loss_weights['mask_pts']*loss_mask_pts, " CFAR: ", loss_weights['cfar']*loss_cfar, \
+        " Num pts: ", loss_weights['num_pts']*loss_num_pts)
+    """
     L_rot = (loss_weights['icp_rot']*loss_rot).detach()
     L_trans = (loss_weights['icp_trans']*loss_trans).detach()
     L_fft = (loss_weights['fft']*loss_fft).detach()
@@ -298,6 +311,9 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
                 #    azimuths = batch_scan['azimuths'].to(device)
                 #    fft_mask = radar_polar_to_cartesian_diff(fft_mask, azimuths, model.res)
                 ones_mask = fft_mask
+            elif loss_weights['mask_pts'] > 0.0:
+                map_pts = batch_map['pc'].to(device)
+                ones_mask = extract_bev_from_pts(map_pts)
             else:
                 ones_mask = torch.ones_like(fft_data)
 
@@ -307,8 +323,8 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
 
             # Compute loss
             if baseline_type == "train":
-                loss_init, _ = eval_training_loss(batch_T_init, mask_ones, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights, gt_eye=gt_eye)
-                loss_ones, _ = eval_training_loss(T_pred_ones, mask_ones, num_non0, batch_T_gt, batch_scan, model, loss_weights=loss_weights, gt_eye=gt_eye)
+                loss_init, _ = eval_training_loss(batch_T_init, mask_ones, num_non0, batch_T_gt, batch_scan, batch_map, model, loss_weights=loss_weights, gt_eye=gt_eye)
+                loss_ones, _ = eval_training_loss(T_pred_ones, mask_ones, num_non0, batch_T_gt, batch_scan, batch_map, model, loss_weights=loss_weights, gt_eye=gt_eye)
                 loss_init = loss_init.detach().cpu().numpy()
                 loss_ones = loss_ones.detach().cpu().numpy()
             elif baseline_type == "val":
@@ -332,7 +348,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
 def main(args):
     run = neptune.init_run(
         project="asrl/mm-icp",
-        api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI3MjljOGQ1ZC1lNDE3LTQxYTQtOGNmMS1kMWY0NDcyY2IyODQifQ==",
+        api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4ODZkYzJmNS1iMWY3LTRlMWYtYWNjYy0zNTFhOWJjYjNiMTQifQ==",
         mode="async"
     )
 
@@ -340,8 +356,8 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 16,
-        "num_val": 16,
+        "num_train": 1,
+        "num_val": 1,
         "augment_factor": 1,        # Factor by which to augment dataset, this will
                                     # increase the number of train samples
         "random": False,
@@ -363,7 +379,7 @@ def main(args):
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 1000,
-        "learning_rate": 1e-5,#5*1e-5,
+        "learning_rate": 1e-4,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -373,10 +389,10 @@ def main(args):
         "b_thresh": 0.09, # Threshold for CFAR
 
         # Choose weights for loss function
-        "loss_icp_rot_weight": 1.0, # Weight for icp rotation error loss
-        "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
-        "loss_fft_mask_weight": 0.3, # Weight for fft mask loss
-        "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
+        "loss_icp_rot_weight": 0.0, # Weight for icp rotation error loss
+        "loss_icp_trans_weight": 0.0, # Weight for icp translation error loss
+        "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
+        "loss_map_pts_mask_weight": 1.0, # Weight for map pts mask loss
         "loss_cfar_mask_weight": 0.0, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
@@ -398,7 +414,7 @@ def main(args):
 
     loss_weights = {"icp_rot": params["loss_icp_rot_weight"], "icp_trans": params["loss_icp_trans_weight"],
                     "fft": params["loss_fft_mask_weight"],
-                    "mask_pts": params["loss_fft_mask_weight"], "cfar": params["loss_cfar_mask_weight"],
+                    "mask_pts": params["loss_map_pts_mask_weight"], "cfar": params["loss_cfar_mask_weight"],
                     "num_pts": params["num_pts_weight"]}
 
     # Load in all ground truth data based on the localization pairs provided in 

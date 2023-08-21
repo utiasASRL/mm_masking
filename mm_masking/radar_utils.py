@@ -134,10 +134,35 @@ def extract_weights(mask, scan_pc):
     mean_w = torch.mean(weights[~fake_scan_idx]).detach()
     max_w = torch.max(weights[~fake_scan_idx]).detach()
     min_w = torch.min(weights[~fake_scan_idx]).detach()
-    # Compute number of non 0 weights in a differentiable way for backprop
+    # Compute number of non 0 weights in a differentiable way for potential backprop
     diff_mean_num_non0 = torch.sum(0.5 * torch.tanh(5*weights[~fake_scan_idx]) + 0.5) / weights.shape[0]
 
     return weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w
+
+def extract_bev_from_pts(pc, cart_pixel_width=640):
+    # Find cartesian indeces of the pointcloud
+    pc_idx = point_to_cart_idx(pc)
+
+    # Set all out of range indices to midpoint
+    pc_idx[pc_idx < 0] = cart_pixel_width // 2
+    pc_idx[pc_idx > (cart_pixel_width-1)] = cart_pixel_width // 2
+
+    # Form the BEV with all 0's for now
+    pc_bev = torch.zeros((pc.shape[0], cart_pixel_width, cart_pixel_width), dtype=pc.dtype, device=pc.device)
+    
+    # Fill in 1's for all nearby pixels from each pc_idx
+    pc_idx_floor = torch.floor(pc_idx).type(torch.long)
+    pc_idx_ceil = torch.ceil(pc_idx).type(torch.long)
+    pc_bev[torch.arange(pc_idx_ceil.shape[0]).unsqueeze(1), pc_idx_ceil[:,:,0], pc_idx_floor[:,:,1]] = 1
+    pc_bev[torch.arange(pc_idx_ceil.shape[0]).unsqueeze(1), pc_idx_ceil[:,:,0], pc_idx_ceil[:,:,1]] = 1
+    pc_bev[torch.arange(pc_idx_ceil.shape[0]).unsqueeze(1), pc_idx_floor[:,:,0], pc_idx_floor[:,:,1]] = 1
+    pc_bev[torch.arange(pc_idx_ceil.shape[0]).unsqueeze(1), pc_idx_floor[:,:,0], pc_idx_ceil[:,:,1]] = 1
+
+    # All out of bound and fake points generated for batching
+    # are stored in centermost pixel, zero it out
+    pc_bev[:, cart_pixel_width // 2, cart_pixel_width // 2] = 0.0
+
+    return pc_bev
 
 def mean_peaks_parallel_fast(arr, diff, steep_fact):
     res = torch.zeros_like(arr)

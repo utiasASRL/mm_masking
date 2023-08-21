@@ -45,6 +45,11 @@ class LearnICPWeightPolicy(nn.Module):
         gt_eye=params["gt_eye"]
         max_iter=params["max_iter"]
 
+        if params["loss_icp_rot_weight"] > 0.0 and params["loss_icp_trans_weight"] > 0.0:
+            self.use_ICP_4_train = True
+        else:
+            self.use_ICP_4_train = False
+
         config_path = '../external/dICP/config/dICP_config.yaml'
         self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
         self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=50, tolerance=1e-5)
@@ -221,7 +226,8 @@ class LearnICPWeightPolicy(nn.Module):
             scan_w_0 = weights[0].detach().cpu().numpy()
             scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
             # Normalize scan_w_0 since weights are relative
-            scan_w_0 = scan_w_0 / np.max(scan_w_0)
+            if np.max(scan_w_0) > 0.0:
+                scan_w_0 = scan_w_0 / np.max(scan_w_0)
             scan_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) > 0.05]
 
             # Also isolate the points for which weight is above 0.01
@@ -252,6 +258,11 @@ class LearnICPWeightPolicy(nn.Module):
         # Pass the modified fft_data through ICP
         del scan_pc_raw
         scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
+        
+        # If we are training and don't want to use ICP, return initial guess
+        if self.training and not self.use_ICP_4_train:
+            return T_init, weight_mask, diff_mean_num_non0
+
         T_est = self.icp(scan_pc_filt, map_pc, T_init, weights)
 
         return T_est, weight_mask, diff_mean_num_non0

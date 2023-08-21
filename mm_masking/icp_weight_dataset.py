@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from pylgmath import se3op, Transformation
-from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff
+from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff, extract_bev_from_pts
 from dICP.ICP import ICP
 from pyboreas.utils.utils import (
     SE3Tose3,
@@ -48,6 +48,18 @@ class ICPWeightDataset():
         b_thresh=params["b_thresh"]
         network_input_type = params["network_input_type"]
 
+        # Set up available augmentations
+        # flip is a symmetric flip about the x-axis of the fft data
+        # rot is the number of 90 degree rotations to apply to the fft data
+        self.augmentations = [
+            {'flip': False, 'rot': 0},  # Baseline (no augmentation)
+            {'flip': False, 'rot': 1},
+            {'flip': False, 'rot': 3},
+            {'flip': True, 'rot': 0},
+            {'flip': True, 'rot': 1},
+            {'flip': True, 'rot': 3},
+        ]
+
         self.loc_pairs = loc_pairs
         self.float_type = float_type
         self.map_sensor = map_sensor
@@ -79,7 +91,6 @@ class ICPWeightDataset():
         vtr_result_dir = osp.join(data_dir, 'vtr_results')
         polar_res = 0.0596
         
-
         self.v_id_vector = None
         self.graph_id_vector = None
         self.augment_id_vector = None
@@ -297,6 +308,7 @@ class ICPWeightDataset():
 
         # Assert that the number of all elements are the same
         assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_gt.shape[0] \
+            == self.augment_id_vector.shape[0] \
             == self.T_loc_init.shape[0] == len(self.loc_radar_path_list) == len(self.loc_cfar_path_list)
 
     def __len__(self):
@@ -312,7 +324,7 @@ class ICPWeightDataset():
         # Load in pointclouds and timestamps
         scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
-        
+
         """
         plt.figure(figsize=(15,15))
         plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
@@ -331,6 +343,7 @@ class ICPWeightDataset():
         if self.network_input_type == 'cartesian':
             fft_data = torch.tensor(loc_radar_img, dtype=self.float_type)/255.0
         else:
+            raise NotImplementedError('Only cartesian input is supported for now')
             fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
             fft_data = torch.tensor(fft_data, dtype=self.float_type)
             azimuths = torch.tensor(azimuths, dtype=self.float_type)
@@ -339,28 +352,53 @@ class ICPWeightDataset():
         fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
         fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
 
+        """
+        cart_indeces = point_to_cart_idx(scan_pc_raw.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
+        print(cart_indeces.shape)
+        figure = plt.figure(figsize=(15,15))
+        plt.imshow(fft_data, cmap='gray')
+        plt.scatter(cart_indeces[0,:,1], cart_indeces[0,:,0], s=2.5, c='red')
+        plt.savefig('fft_og.png')
+        plt.close()
+        """
+
+        # Deal with data augmentation
+        aug_id = self.augment_id_vector[index]
+        if aug_id > 0:
+            scan_pc_raw, scan_pc_filt, map_pc, fft_data, fft_cfar = \
+                self.augment_data(scan_pc_raw, scan_pc_filt, map_pc, fft_data,
+                                  fft_cfar, aug_id)
 
         # DELETE
         """
-        loc_radar_fft_path = osp.join(osp.join('../data', 'vtr_data'), 'boreas-2020-12-04-14-00', 'radar', str(loc_stamp) + '.png')
-        raw_fft_data, azimuths, az_timestamps = load_radar(loc_radar_fft_path)
-        raw_fft_data = torch.tensor(raw_fft_data, dtype=self.float_type)
-        azimuths = torch.tensor(azimuths, dtype=self.float_type)
-        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
-        scan_pc_list = extract_pc(scan_pc_cfar_mask, self.res, azimuths, az_timestamps)
-
-
+        raw_indeces = point_to_cart_idx(scan_pc_raw.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
+        filt_indeces = point_to_cart_idx(scan_pc_filt.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
         
-        plt.figure(figsize=(15,15))
-        plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
-        #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
-        plt.scatter(scan_pc_filt[:,0], scan_pc_filt[:,1], s=0.5, c='blue')
-        # plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='green')
-        #plt.scatter(curr_pts_map_frame[:,0], curr_pts_map_frame[:,1], s=0.5, c='green')
-        plt.ylim([-80, 80])
-        plt.xlim([-80, 80])
-        plt.savefig('align.png')
+        map_pc_idx = map_pc[torch.abs(map_pc[:,0]) < 100].unsqueeze(0)
+        map_indeces = point_to_cart_idx(map_pc_idx, cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
+        figure = plt.figure(figsize=(15,15))
+        plt.imshow(fft_data, cmap='gray')
+        plt.scatter(map_indeces[0,:,1], map_indeces[0,:,0], s=2.5, c='red')
+        plt.scatter(raw_indeces[0,:,1], raw_indeces[0,:,0], s=2.5, c='blue')
+        plt.scatter(filt_indeces[0,:,1], filt_indeces[0,:,0], s=2.5, c='green')
+        plt.savefig('fft_aug.png')
         plt.close()
+        time.sleep(2.0)
+        
+
+        map_pc_batch = torch.stack([map_pc, map_pc+10], dim=0)
+        print(map_pc_batch.shape)
+        map_pt_mask = extract_bev_from_pts(map_pc_batch)
+
+        map_pt_mask = map_pt_mask[0]
+
+        figure = plt.figure(figsize=(15,15))
+        #plt.imshow(fft_data, cmap='gray')
+        plt.imshow(map_pt_mask.squeeze(0), cmap='gray')
+        plt.savefig('map_pt_mask.png')
+        plt.close()
+        time.sleep(2.0)
+        fadsdfsa
         """
 
 
@@ -426,3 +464,39 @@ class ICPWeightDataset():
             return map_pts_loc_frame[valid_pts], map_norms_loc_frame[valid_pts]
         else:
             return map_pts[valid_pts], map_norms[valid_pts]
+    
+    def augment_data(self, scan_pc_raw, scan_pc_filt, map_pc, fft_data, fft_cfar, aug_id):
+        if not self.gt_eye:
+            raise NotImplementedError('Only gt_eye=True is supported at this time')
+
+        aug = self.augmentations[aug_id]
+        flip = aug['flip']
+        rot = aug['rot']
+        if flip:
+            fft_data = torch.flipud(fft_data)
+            fft_cfar = torch.flipud(fft_cfar)
+            scan_pc_raw[:,0] *= -1
+            scan_pc_filt[:,0] *= -1
+            map_pc[:,0] *= -1
+        if rot != 0:
+            fft_data = torch.rot90(fft_data, k=rot)
+            fft_cfar = torch.rot90(fft_cfar, k=rot)
+            if rot == 1:
+                rot90_mat = torch.tensor([[0, -1],
+                                    [1,  0]], dtype=self.float_type)
+            elif rot == 2:
+                rot90_mat = torch.tensor([[-1,  0],
+                                    [ 0, -1]], dtype=self.float_type)
+            elif rot == 3:
+                rot90_mat = torch.tensor([[ 0, 1],
+                                    [-1, 0]], dtype=self.float_type)
+            else:
+                rot90_mat = torch.eye(2, dtype=self.float_type)
+
+            scan_pc_raw[:,:2] = torch.matmul(scan_pc_raw[:,:2], rot90_mat)
+            scan_pc_filt[:,:2] = torch.matmul(scan_pc_filt[:,:2], rot90_mat)
+            map_pc[:,:2] = torch.matmul(map_pc[:,:2], rot90_mat)
+            if map_pc.shape[1] == 6:
+                map_pc[:,3:5] = torch.matmul(map_pc[:,3:5], rot90_mat)
+
+        return scan_pc_raw, scan_pc_filt, map_pc, fft_data, fft_cfar
