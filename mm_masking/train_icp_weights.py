@@ -16,6 +16,7 @@ from neptune_pytorch import NeptuneLogger
 from neptune.utils import stringify_unsupported
 import torch.nn as nn
 from radar_utils import radar_polar_to_cartesian_diff, extract_bev_from_pts
+import os.path as osp
 
 
 scaler = torch.cuda.amp.GradScaler()
@@ -378,8 +379,8 @@ def main(args):
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 1000,
-        "learning_rate": 1e-4,#5*1e-5,
+        "num_epochs": 100,
+        "learning_rate": 1e-5,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.0,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -389,11 +390,11 @@ def main(args):
         "b_thresh": 0.09, # Threshold for CFAR
 
         # Choose weights for loss function
-        "loss_icp_rot_weight": 0.0, # Weight for icp rotation error loss
-        "loss_icp_trans_weight": 0.0, # Weight for icp translation error loss
+        "loss_icp_rot_weight": 1.0, # Weight for icp rotation error loss
+        "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
-        "loss_map_pts_mask_weight": 1.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.0, # Weight for cfar mask loss
+        "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
+        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
@@ -423,8 +424,11 @@ def main(args):
     """
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-01-13-26"],
                       ["boreas-2020-11-26-13-58", "boreas-2021-03-30-14-23"],
-                      ["boreas-2020-11-26-13-58", "boreas-2021-04-29-15-55"]]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-01-26-10-59"]]
+                      ["boreas-2020-11-26-13-58", "boreas-2021-04-29-15-55"],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
+    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-05-06-13-19"]]
     
     train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
@@ -447,8 +451,8 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
-    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=False)
+    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=False)
     print("Dataloader created")
 
     # Initialize policy
@@ -465,16 +469,17 @@ def main(args):
     npt_logger = NeptuneLogger(
         run=run,
         model=policy,
+        log_gradients=True,
+        log_freq=1
     )
     run[npt_logger.base_namespace]["parameters"] = stringify_unsupported(
         params
     )
 
     # Form result directory
-    result_dir = 'results/' + 'mask' + '/learn'
-    if not os.path.exists(result_dir):
-        os.makedirs(result_dir)
-    result_naming = result_dir + '/' + params["icp_type"]
+    checkpoint_dir = osp.join('results', 'checkpoints')
+    if not osp.exists(checkpoint_dir): os.makedirs(checkpoint_dir)
+    best_policy_path = osp.join(checkpoint_dir, 'best_policy.pt')
 
     # Evaluate baselines for training and evaluation
     train_init_baseline, train_ones_baseline = generate_baseline(policy, training_iterator, baseline_type="train",
@@ -527,7 +532,7 @@ def main(args):
         if avg_norm[0, 0] < best_norm or epoch == 0:
             print("Saving best policy")
             best_norm = avg_norm[0, 0]
-            torch.save(policy.state_dict(), result_naming + '_best_policy.pt')
+            torch.save(policy.state_dict(), best_policy_path)
 
         print("Average norm: ", avg_norm[0, 0])
         print("Best norm: ", best_norm)
@@ -566,8 +571,13 @@ def main(args):
         run[npt_logger.base_namespace]["epoch/val_init_baseline"].append(val_init_baseline)
         run[npt_logger.base_namespace]["epoch/val_ones_baseline"].append(val_ones_baseline)
 
+        # Save checkpoint
+        curr_checkpoint_path = osp.join(checkpoint_dir, "epoch_{}.pt".format(epoch))
+        torch.save(policy.state_dict(), curr_checkpoint_path)
+        run[npt_logger.base_namespace]["model_checkpoints/my_model"].upload(curr_checkpoint_path)
+
     # Do final validation using the best policy
-    policy.load_state_dict(torch.load(result_naming + '_best_policy.pt'))
+    policy.load_state_dict(torch.load(best_policy_path))
     avg_norm, _, _, _, _ = validate_policy(policy, validation_iterator, neptune_run=neptune_run, epoch=epoch,
                                    device=params["device"], binary=params["binary_inference"], gt_eye=params["gt_eye"])
     print("Best average norm: ", avg_norm[0,0])

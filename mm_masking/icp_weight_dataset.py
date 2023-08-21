@@ -154,7 +154,7 @@ class ICPWeightDataset():
                     self.max_loc_pts = pair_df['max_loc'][0]
                 if pair_df['max_map'][0] > self.max_map_pts:
                     self.max_map_pts = pair_df['max_map'][0]
-            print("Loading from metadata: " + str(extract_pcs_metadata))
+            print("Loading from metadata: " + str(not extract_pcs_metadata))
             local_max_loc_pts = 0
             local_max_map_pts = 0
             for ii, (loc_v, e) in enumerate(TemporalIterator(v_start)):
