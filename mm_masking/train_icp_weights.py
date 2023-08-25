@@ -17,7 +17,8 @@ from neptune.utils import stringify_unsupported
 import torch.nn as nn
 from radar_utils import radar_polar_to_cartesian_diff, extract_bev_from_pts
 import os.path as osp
-
+from datetime import datetime
+from pytz import timezone
 
 scaler = torch.cuda.amp.GradScaler()
 
@@ -357,10 +358,9 @@ def main(args):
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": 1,
-        "num_val": 1,
-        "augment_factor": 1,        # Factor by which to augment dataset, this will
-                                    # increase the number of train samples
+        "num_train": -1,
+        "num_val": 512,
+        "augment": True,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
@@ -374,15 +374,15 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 8,
-        "shuffle": False,
+        "batch_size": 16,
+        "shuffle": True,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 100,
         "learning_rate": 1e-5,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
-        "dropout": 0.0,   # Dropout rate, set 0 for no dropout
+        "dropout": 0.05,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
         "init_weights": True, # True or false for manually initializing weights
         "clip_value": 0.0, # Value to clip gradients at, set 0 for no clipping
@@ -390,15 +390,15 @@ def main(args):
         "b_thresh": 0.09, # Threshold for CFAR
 
         # Choose weights for loss function
-        "loss_icp_rot_weight": 1.0, # Weight for icp rotation error loss
-        "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
+        "loss_icp_rot_weight": 0.0, # Weight for icp rotation error loss
+        "loss_icp_trans_weight": 0.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
-        "loss_map_pts_mask_weight": 0.0, # Weight for map pts mask loss
-        "loss_cfar_mask_weight": 0.3, # Weight for cfar mask loss
+        "loss_map_pts_mask_weight": 1.0, # Weight for map pts mask loss
+        "loss_cfar_mask_weight": 0.0, # Weight for cfar mask loss
         "num_pts_weight": 0.0, # Weight for number of points loss
         "optimizer": "adam", # Options are "adam" and "sgd"
         "icp_loss_only_iter": -1, # Number of iterations after which to only use icp loss
-        "max_iter": 8, # Maximum number of iterations for icp
+        "max_iter": 10, # Maximum number of iterations for icp
 
         # Model setup
         "network_input_type": "cartesian", # Options are "cartesian" and "polar", what the network takes in
@@ -419,17 +419,24 @@ def main(args):
                     "num_pts": params["num_pts_weight"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
-    train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
-    """
+    #train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-04-20-14-11']]
+    #val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
+
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-01-13-26"],
+                       ["boreas-2020-11-26-13-58", "boreas-2020-12-18-13-44"],
+                       ["boreas-2020-11-26-13-58", "boreas-2021-02-02-14-07"],
+                       ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
                       ["boreas-2020-11-26-13-58", "boreas-2021-03-30-14-23"],
+                      ["boreas-2020-11-26-13-58", "boreas-2021-04-20-14-11"],
+                      ["boreas-2020-11-26-13-58", "boreas-2021-04-08-12-44"],
                       ["boreas-2020-11-26-13-58", "boreas-2021-04-29-15-55"],
+                      ["boreas-2020-11-26-13-58", "boreas-2021-05-06-13-19"],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
-                      ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
+                      ["boreas-2020-11-26-13-58", 'boreas-2021-08-05-13-34'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
-    val_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2021-05-06-13-19"]]
-    
+    val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-04-13-14-49']]
+
+    """
     train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
                       ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
@@ -451,8 +458,8 @@ def main(args):
     #torch.autograd.set_detect_anomaly(True)
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=False)
-    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=False)
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
+    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
     print("Dataloader created")
 
     # Initialize policy
@@ -469,7 +476,7 @@ def main(args):
     npt_logger = NeptuneLogger(
         run=run,
         model=policy,
-        log_gradients=True,
+        log_gradients=False,
         log_freq=1
     )
     run[npt_logger.base_namespace]["parameters"] = stringify_unsupported(
@@ -509,7 +516,7 @@ def main(args):
         print ('EPOCH ', epoch)
 
         # Train the driving policy
-        if epoch % 5 == 0 or epoch == params["num_epochs"] - 1 or epoch == 0:
+        if epoch % 1 == 0 or epoch == params["num_epochs"] - 1 or epoch == 0:
             neptune_run = run
         else:
             neptune_run = None
@@ -575,6 +582,7 @@ def main(args):
         curr_checkpoint_path = osp.join(checkpoint_dir, "epoch_{}.pt".format(epoch))
         torch.save(policy.state_dict(), curr_checkpoint_path)
         run[npt_logger.base_namespace]["model_checkpoints/my_model"].upload(curr_checkpoint_path)
+
 
     # Do final validation using the best policy
     policy.load_state_dict(torch.load(best_policy_path))

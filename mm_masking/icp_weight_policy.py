@@ -220,11 +220,17 @@ class LearnICPWeightPolicy(nn.Module):
             # Plot the scan and map pointclouds
             map_pc_0 = map_pc[0].detach().cpu().numpy()
             # Only use map_pc_0 that are less than self.ICP_alg.target_pad_val
-            map_pc_0 = map_pc_0[map_pc_0[:, 0] < self.ICP_alg.target_pad_val]
+            map_pc_0 = map_pc_0[np.abs(map_pc_0[:, 0]) < self.ICP_alg.target_pad_val]
+            map_pc_0 = map_pc_0[np.abs(map_pc_0[:, 1]) < self.ICP_alg.target_pad_val]
             scan_pc_0 = scan_pc_raw[0].detach().cpu().numpy()
             # Only use scan_pc_0 points that aren't exactly 0
             scan_w_0 = weights[0].detach().cpu().numpy()
             scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
+
+            # Check if any scan_w_0 is nan
+            if np.isnan(np.sum(scan_w_0)):
+                scan_w_0 = np.zeros(scan_w_0.shape)
+
             # Normalize scan_w_0 since weights are relative
             if np.max(scan_w_0) > 0.0:
                 scan_w_0 = scan_w_0 / np.max(scan_w_0)
@@ -238,7 +244,7 @@ class LearnICPWeightPolicy(nn.Module):
 
             fig = plt.figure()
             plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=1.0, c='r')
-            plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='b', alpha=scan_w_0/max(scan_w_0))
+            plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='b', alpha=scan_w_0)
             plt.legend(['map', 'scan'])
             plt.title("Pointclouds")
             neptune_run["extracted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
