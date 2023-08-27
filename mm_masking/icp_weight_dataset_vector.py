@@ -76,7 +76,6 @@ class ICPWeightDataset():
 
         data_dir = '../data'
         dataset_dir = osp.join(data_dir, 'vtr_data')
-        vtr_result_dir = osp.join(data_dir, 'vtr_results')
         vtr_raw_result_dir = osp.join(data_dir, 'vtr_results_raw')
 
         self.polar_res = 0.0596
@@ -89,6 +88,9 @@ class ICPWeightDataset():
         self.graph_list = []
         self.loc_radar_path_list = []
         self.loc_cfar_path_list = []
+        self.loc_raw_pc_path_list = []
+        self.loc_filt_pc_path_list = []
+        self.map_pc_path_list = []
         # Need to save max loc and map pointcloud size for padding for batch assembly
         self.max_loc_pts = 0
         self.max_map_pts = 0
@@ -96,17 +98,6 @@ class ICPWeightDataset():
         for pair_idx, pair in enumerate(loc_pairs):
             map_seq = pair[0]
             loc_seq = pair[1]
-
-            gt_map_poses, gt_map_times = read_traj_file_gt2(osp.join(dataset_dir, map_seq, "applanix", map_sensor + "_poses.csv"), dim=2)
-            gt_loc_poses, gt_loc_times = read_traj_file_gt2(osp.join(dataset_dir, loc_seq, "applanix", loc_sensor + "_poses.csv"), dim=2)
-            graph_dir = osp.join(vtr_result_dir, sensor_dir_name, map_seq, loc_seq, 'graph')
-            factory = Rosbag2GraphFactory(graph_dir)
-
-            pair_graph = factory.buildGraph()
-            self.graph_list.append(pair_graph)
-            print("Loading loc pair: " + str(pair) + " with " + str(pair_graph.number_of_vertices) + " vertices and " + str(pair_graph.number_of_edges) + " edges")
-            
-            v_start = pair_graph.get_vertex((1,0))
 
             # Save transform from map sensor to robot
             # This is needed because the map pointcloud is saved in robot frame,
@@ -123,62 +114,53 @@ class ICPWeightDataset():
             self.T_map_sensor_robot.append(T_map_sensor_robot)
 
             # Check if result directory contains a metadata file
-            # If not, create one
             map_pc_path = osp.join(vtr_raw_result_dir, sensor_dir_name, map_seq, 'map_pc')
-            if not osp.exists(map_pc_path):
-                os.makedirs(map_pc_path)
             loc_path = osp.join(vtr_raw_result_dir, sensor_dir_name, map_seq, loc_seq)
-            if not osp.exists(loc_path):
-                os.makedirs(loc_path)
-                os.makedirs(osp.join(loc_path, 'raw_pts'))
-                os.makedirs(osp.join(loc_path, 'filt_pts'))
             metadata_path = osp.join(loc_path, 'metadata.csv')
             gt_transform_path = osp.join(loc_path, 'groundtruth.csv')
-            if not osp.exists(metadata_path):
-                df_data = {'complete' : 0, 'up_to_idx': -1, 'max_loc': -1, 'max_map': -1}
-                df = pd.DataFrame(df_data, index=[0])
-                df.to_csv(metadata_path, index=False)
+            
+            assert osp.exists(map_pc_path), "Map pointclouds not found at: " + map_pc_path
+            assert osp.exists(loc_path), "Localization results not found at: " + loc_path
+            assert osp.exists(gt_transform_path), "Ground truth localization to map transform not found at: " + gt_transform_path
+            assert osp.exists(metadata_path), "Metadata not found at: " + metadata_path
 
             # Load in the metadata file to see if we need to extract max points during
             # data loading. 
-            pair_df = pd.read_csv(metadata_path)
-            # If we have sufficient metadata about what we wish to extract,
-            # don't bother extracting more
-            extract_pcs_metadata = True
-            if (pair_df['complete'][0] == 1 or (pair_df['up_to_idx'][0] >= num_samples and num_samples>0)):
-                extract_pcs_metadata = False
-                # Check if new max is reached
-                if pair_df['max_loc'][0] > self.max_loc_pts:
-                    self.max_loc_pts = pair_df['max_loc'][0]
-                if pair_df['max_map'][0] > self.max_map_pts:
-                    self.max_map_pts = pair_df['max_map'][0]
-                
-                # Delete gt_transform_path file
-                if osp.exists(gt_transform_path):
-                    os.remove(gt_transform_path)
-            print("Loading from metadata: " + str(not extract_pcs_metadata))
             local_max_loc_pts = 0
             local_max_map_pts = 0
-            for ii, (loc_v, e) in enumerate(TemporalIterator(v_start)):
-                # Check if vertex is valid
-                if e.from_id == vtr_pose_graph.INVALID_ID:
-                    continue
-                
-                # Extract vertex info
-                map_v = g_utils.get_closest_teach_vertex(loc_v)
-                map_ptr = map_v.get_data("pointmap_ptr")
-                map_v = pair_graph.get_vertex(map_ptr.map_vid)
 
+            # Load in groundtruth
+            gt_transform_df = pd.read_csv(gt_transform_path)
+            map_stamp_csv = gt_transform_df['map_stamp'].values
+            loc_stamp_csv = gt_transform_df['loc_stamp'].values
+            T_gt_0_0 = gt_transform_df['T_gt_0_0'].values
+            T_gt_0_1 = gt_transform_df['T_gt_0_1'].values
+            T_gt_0_2 = gt_transform_df['T_gt_0_2'].values
+            T_gt_0_3 = gt_transform_df['T_gt_0_3'].values
+            T_gt_1_0 = gt_transform_df['T_gt_1_0'].values
+            T_gt_1_1 = gt_transform_df['T_gt_1_1'].values
+            T_gt_1_2 = gt_transform_df['T_gt_1_2'].values
+            T_gt_1_3 = gt_transform_df['T_gt_1_3'].values
+            T_gt_2_0 = gt_transform_df['T_gt_2_0'].values
+            T_gt_2_1 = gt_transform_df['T_gt_2_1'].values
+            T_gt_2_2 = gt_transform_df['T_gt_2_2'].values
+            T_gt_2_3 = gt_transform_df['T_gt_2_3'].values
+            T_gt_3_0 = gt_transform_df['T_gt_3_0'].values
+            T_gt_3_1 = gt_transform_df['T_gt_3_1'].values
+            T_gt_3_2 = gt_transform_df['T_gt_3_2'].values
+            T_gt_3_3 = gt_transform_df['T_gt_3_3'].values
+            T_gt_csv = np.stack((T_gt_0_0, T_gt_0_1, T_gt_0_2, T_gt_0_3,
+                             T_gt_1_0, T_gt_1_1, T_gt_1_2, T_gt_1_3,
+                             T_gt_2_0, T_gt_2_1, T_gt_2_2, T_gt_2_3,
+                             T_gt_3_0, T_gt_3_1, T_gt_3_2, T_gt_3_3), axis=1)
+
+            for ii in range(len(loc_stamp_csv)):
                 # Extract timestamps
-                loc_stamp = int(loc_v.stamp * 1e-3)
-                map_stamp = int(map_v.stamp * 1e-3)
+                loc_stamp = loc_stamp_csv[ii]
+                map_stamp = map_stamp_csv[ii]
 
                 # Ensure radar image exists
                 loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
-                #if network_input_type == 'cartesian':
-                #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + '.png')
-                #else:
-                
                 loc_radar_path = loc_radar_fft_path
                 if not osp.exists(loc_radar_path):
                     continue
@@ -203,56 +185,23 @@ class ICPWeightDataset():
                     #    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.polar_res)
                     cv2.imwrite(loc_cfar_path, 255*fft_cfar.squeeze(0).numpy())
 
-                # Check that timestamps are matching to gt poses
-                assert loc_stamp == gt_loc_times[ii], "query: {}".format(loc_stamp)
-                closest_map_t = get_closest_index(map_stamp, gt_map_times)
-                assert map_stamp == gt_map_times[closest_map_t], "query: {}".format(map_stamp)
-                # Extract gt map pose
-                gt_map_pose_idx = gt_map_poses[closest_map_t]
-                gt_T_s2_s1 = get_inverse_tf(gt_loc_poses[ii]) @ gt_map_pose_idx
+                # Load in gt pose
+                gt_T_s2_s1 = T_gt_csv[ii].reshape((4,4))
 
                 # Save ground truth localization to map pose
                 T_gt_idx = torch.tensor(gt_T_s2_s1, dtype=float_type)
 
-                # Now that we have ground truth, we can filter the map points to know max point size
-                # We only do filtering for lidar and only if we dont already have
-                # pointcloud metadata. This is done to speed up data loading
-                if extract_pcs_metadata:
-                    curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix)
-                    assert curr_raw_pts.shape == curr_filt_pts.shape, 'Raw and filtered pointclouds dont match!'
-
-                    map_pts_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_pts.T + T_map_sensor_robot[:3, 3:4]).T
-                    map_norms_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_norms.T).T
-                    map_pts, map_norms = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_gt_idx, return_aligned=True)
-                    
-                    map_pc = torch.cat((map_pts, map_norms), dim=1)
-
-                    # Save loc pointcloud to loc_path
-                    loc_pc_raw_path = osp.join(loc_path, 'raw_pts', str(loc_stamp) + '.bin')
-                    curr_raw_pts.tofile(loc_pc_raw_path)
-                    loc_pc_filt_path = osp.join(loc_path, 'filt_pts', str(loc_stamp) + '.bin')
-                    curr_filt_pts.tofile(loc_pc_filt_path)
-                    map_pc_path_idx = osp.join(map_pc_path, str(loc_stamp) + '.bin')
-                    if not osp.exists(map_pc_path_idx):
-                        map_pc.numpy().tofile(map_pc_path_idx)
-
-                    # Plot for visualization
-                    """
-                    map_pts_loc_frame = (T_gt_idx[:3,:3] @ map_pts_sensor_frame[:,:3].T + T_gt_idx[:3, 3:4]).T
-                    plt.figure(figsize=(15,15))
-                    plt.scatter(map_pts_loc_frame[:,0], map_pts_loc_frame[:,1], s=1.0, c='red')
-                    plt.scatter(curr_filt_pts[:,0], curr_filt_pts[:,1], s=0.5, c='blue')
-                    plt.ylim([-80, 80])
-                    plt.xlim([-80, 80])
-                    plt.savefig('align.png')
-                    plt.close()
-                    time.sleep(0.1)
-                    """
-
-                    if curr_raw_pts.shape[0] > local_max_loc_pts:
-                        local_max_loc_pts = curr_raw_pts.shape[0]
-                    if map_pts.shape[0] > local_max_map_pts:
-                        local_max_map_pts = map_pts.shape[0]
+                # Load in the metadata file to see if we need to extract max points during
+                # data loading. 
+                pair_df = pd.read_csv(metadata_path)
+                # If we have sufficient metadata about what we wish to extract,
+                # don't bother extracting more
+                #assert pair_df['complete'][0] == 1, "Metadata file is incomplete"
+                # Check if new max is reached
+                if pair_df['max_loc'][0] > self.max_loc_pts:
+                    self.max_loc_pts = pair_df['max_loc'][0]
+                if pair_df['max_map'][0] > self.max_map_pts:
+                    self.max_map_pts = pair_df['max_map'][0]
 
                 # Generate random perturbation to ground truth pose
                 # The map pointcloud is transformed into the scan frame using T_gt
@@ -279,58 +228,38 @@ class ICPWeightDataset():
                 T_init_idx = torch.tensor(T_init_idx, dtype=float_type)
 
                 # Stack data for more efficient storage and retrieval
-                if self.v_id_vector is None:
-                    self.v_id_vector = np.array([loc_v.id])
-                    self.graph_id_vector = np.array([pair_idx])
+                if self.T_loc_gt is None:
                     self.T_loc_gt = T_gt_idx.unsqueeze(0)
                     self.T_loc_init = T_init_idx.unsqueeze(0)
                 else:
-                    self.v_id_vector = np.append(self.v_id_vector, loc_v.id)
-                    self.graph_id_vector = np.append(self.graph_id_vector, pair_idx)
                     self.T_loc_gt = torch.cat((self.T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
                     self.T_loc_init = torch.cat((self.T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
 
                 self.loc_radar_path_list.append(loc_radar_path)
                 self.loc_cfar_path_list.append(loc_cfar_path)
+
+                # Load in pointcloud paths
+                loc_raw_pc_path = osp.join(loc_path, 'raw_pts', str(loc_stamp) + '.bin')
+                loc_pc_filt_path = osp.join(loc_path, 'filt_pts', str(loc_stamp) + '.bin')
+                map_pc_path_idx = osp.join(map_pc_path, str(loc_stamp) + '.bin')
+                self.loc_raw_pc_path_list.append(loc_raw_pc_path)
+                self.loc_filt_pc_path_list.append(loc_pc_filt_path)
+                self.map_pc_path_list.append(map_pc_path_idx)
+
                 if (ii % 100) == 0:
                     print(str(ii) + " data samples processed")
 
-                # Save map timestamp, loc timestamp, and gt transform to file
-                if extract_pcs_metadata:
-                    df_data = {'map_stamp' : map_stamp, 'loc_stamp': loc_stamp, 
-                               'T_gt_0_0': gt_T_s2_s1[0,0], 'T_gt_0_1': gt_T_s2_s1[0,1], 'T_gt_0_2': gt_T_s2_s1[0,2], 'T_gt_0_3': gt_T_s2_s1[0,3],
-                               'T_gt_1_0': gt_T_s2_s1[1,0], 'T_gt_1_1': gt_T_s2_s1[1,1], 'T_gt_1_2': gt_T_s2_s1[1,2], 'T_gt_1_3': gt_T_s2_s1[1,3],
-                               'T_gt_2_0': gt_T_s2_s1[2,0], 'T_gt_2_1': gt_T_s2_s1[2,1], 'T_gt_2_2': gt_T_s2_s1[2,2], 'T_gt_2_3': gt_T_s2_s1[2,3],
-                               'T_gt_3_0': gt_T_s2_s1[3,0], 'T_gt_3_1': gt_T_s2_s1[3,1], 'T_gt_3_2': gt_T_s2_s1[3,2], 'T_gt_3_3': gt_T_s2_s1[3,3]}
-                    df = pd.DataFrame(df_data, index=[0])
-                    if not osp.exists(gt_transform_path):
-                        df.to_csv(gt_transform_path, index=False)
-                    else:
-                        df.to_csv(gt_transform_path, mode='a', header=False, index=False)
-
-                if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples:
+                if num_samples > 0 and self.T_loc_gt.shape[0] >= num_samples:
                     break
-            
-            # Update metadata if it was collected
-            if extract_pcs_metadata:
-                # Save metadata
-                meta_complete = (num_samples == -1)
-                df_data = {'complete' : meta_complete, 'up_to_idx': ii, 'max_loc': local_max_loc_pts, 'max_map': local_max_map_pts}
-                df = pd.DataFrame(df_data, index=[0])
-                df.to_csv(metadata_path, index=False)
-                
-                # Overwrite max point sizes if they are larger
-                if local_max_loc_pts > self.max_loc_pts:
-                    self.max_loc_pts = local_max_loc_pts
-                if local_max_map_pts > self.max_map_pts:
-                    self.max_map_pts = local_max_map_pts
 
         # Assert that the number of all elements are the same
-        assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_gt.shape[0] \
-            == self.T_loc_init.shape[0] == len(self.loc_radar_path_list) == len(self.loc_cfar_path_list)
+        assert self.T_loc_gt.shape[0] == self.T_loc_init.shape[0] \
+            == len(self.loc_radar_path_list) == len(self.loc_cfar_path_list) \
+            == len(self.loc_raw_pc_path_list) == len(self.loc_filt_pc_path_list) \
+            == len(self.map_pc_path_list), "Number of elements in dataset do not match"
 
     def __len__(self):
-        return self.v_id_vector.shape[0]
+        return self.T_loc_gt.shape[0]
 
     def __getitem__(self, index):
         # Load in initial guess
@@ -339,22 +268,17 @@ class ICPWeightDataset():
         # Load in ground truth localization to map pose
         T_ml_gt = self.T_loc_gt[index]
 
-        # Load in pointclouds and timestamps
-        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
-        assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
+        # Load in pointclouds
+        scan_pc_raw = load_pc_from_file(self.loc_raw_pc_path_list[index], normals=False)
+        scan_pc_filt = load_pc_from_file(self.loc_filt_pc_path_list[index], normals=False)
+        map_pc = load_pc_from_file(self.map_pc_path_list[index])
 
-        """
-        plt.figure(figsize=(15,15))
-        plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
-        #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
-        plt.scatter(scan_pc_filt[:,0], scan_pc_filt[:,1], s=0.5, c='blue')
-        # plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='green')
-        #plt.scatter(curr_pts_map_frame[:,0], curr_pts_map_frame[:,1], s=0.5, c='green')
-        plt.ylim([-80, 80])
-        plt.xlim([-80, 80])
-        plt.savefig('align.png')
-        plt.close()
-        """
+        # Pad for batching
+        scan_pc_pad = torch.zeros((self.max_loc_pts - scan_pc_raw.shape[0], 3), dtype=self.float_type)
+        scan_pc_raw = torch.cat((scan_pc_raw, scan_pc_pad), dim=0)
+        scan_pc_filt = torch.cat((scan_pc_filt, scan_pc_pad), dim=0)
+        map_pc_pad = self.target_pad_val*torch.ones((self.max_map_pts - map_pc.shape[0], 6), dtype=self.float_type)
+        map_pc = torch.cat((map_pc, map_pc_pad), dim=0)
 
         # Load in fft data
         #loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
@@ -397,6 +321,7 @@ class ICPWeightDataset():
         raw_indeces = point_to_cart_idx(scan_pc_raw.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
         filt_indeces = point_to_cart_idx(scan_pc_filt.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
         
+        
         map_pc_idx = map_pc[torch.abs(map_pc[:,0]) < 100].unsqueeze(0)
         map_indeces = point_to_cart_idx(map_pc_idx, cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
         figure = plt.figure(figsize=(15,15))
@@ -407,8 +332,7 @@ class ICPWeightDataset():
         plt.savefig('fft_aug.png')
         plt.close()
         time.sleep(2.0)
-        #adsfda
-        
+
         
         map_pc_batch = torch.stack([map_pc, map_pc+10], dim=0)
         print(map_pc_batch.shape)
@@ -426,8 +350,8 @@ class ICPWeightDataset():
         """
 
         loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
-                    'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
-        map_data = {'pc': map_pc, 'timestamp' : map_stamp}
+                    'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : 0.0}
+        map_data = {'pc': map_pc, 'timestamp' : 0.0}
         T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
 
         return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data}

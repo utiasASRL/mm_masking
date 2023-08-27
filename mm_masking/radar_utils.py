@@ -7,9 +7,12 @@ import torch.nn.functional as F
 import cv2
 import time
 
-def load_pc_from_file(file_path, to_type=None, to_device='cpu'):
+def load_pc_from_file(file_path, to_type=None, to_device='cpu', normals=True):
     pc = np.fromfile(file_path, dtype=np.float32)
-    pc = pc.reshape((len(pc) // 6, 6))
+    if normals:
+        pc = pc.reshape((len(pc) // 6, 6))
+    else:
+        pc = pc.reshape((len(pc) // 3, 3))
     # Send to device
     pc = torch.from_numpy(pc).to(to_device)
     # Convert to type
