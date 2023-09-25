@@ -1,4 +1,3 @@
-#FROM ubuntu:22.04
 FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu22.04
 
 ARG GROUPID=0
@@ -98,6 +97,14 @@ RUN pip3 install \
   websocket-client
 
 RUN apt install -q -y doxygen
+
+##Install LibTorch
+RUN curl https://download.pytorch.org/libtorch/cu117/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu117.zip --output libtorch.zip
+RUN unzip libtorch.zip -d /opt/torch
+ENV TORCH_LIB=/opt/torch/libtorch
+ENV LD_LIBRARY_PATH=$TORCH_LIB/lib:${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+ENV CMAKE_PREFIX_PATH=$TORCH_LIB:$CMAKE_PREFIX_PATH
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility,graphics
 
 # Set up entrypoint
 COPY ./entrypoint.sh ./entrypoint.sh
