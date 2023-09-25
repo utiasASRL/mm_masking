@@ -51,11 +51,8 @@ bash scripts/setup_container.sh
 This gets run every time the `run_docker.sh` script gets run and so only needs to be manually called whenever packages or the virtual environment is changed.
 
 # Data Generation
-## Downloading Boreas Data
-
-
 ## Odometry (Teach) and Localization (Repeat)
-This pipeline is trained, tested, and validated using the Teach & Repeat framework using the [Boreas](https://www.boreas.utias.utoronto.ca/#/) dataset. A map is constructed during the Teach pass and subsequent Repeat passes are localized against that map.
+This pipeline is trained, tested, and validated using the Teach & Repeat (T&R) framework on the [Boreas](https://www.boreas.utias.utoronto.ca/#/) dataset. A map is constructed during the Teach pass and subsequent Repeat passes are localized against that map. This code is contained in the `vtr3` and `vtr_testing_radar` submodules.
 
 Make sure that `setup_container.sh` has been run, as it defines all required variables and sources all required packages!
 
@@ -144,4 +141,15 @@ WARNING [odometry_icp_module.cpp:554] [radar.odometry_icp] w_m_r_in_r is:  0.002
 
 Consult the [Boreas download page](https://www.boreas.utias.utoronto.ca/#/download) and the example download script to download additional sequences. Remember that localization can only be run once an odometry test has been run on a different sequence.
 
+## Using Teach and Repeat Data
+The training, validation, and testing code runs extracts data directly from the `vtr_results` result directories using the `vtr3_python` submodule. Every time that ICP is run in the T&R framework (any time a sensor measurement from a repeat sequence is localized against a submap constructed during the repeat sequence during a `run_test.sh localization` script execution), the raw and processed (motion corrected) pointclouds from the repeat sequence frame and the submap against which the pointcloud is localized against are saved. The raw pointcloud is simply the original BFAR-extracted pointcloud from the raw radar scan. To ensure that all data is saved, the following configuration parameters must be set in the `gen_data/config` directory for the repeat run:
+
+1. `save_raw_point_cloud` should be true
+2. `odometry/mapping/max_translation` and `odometry/mapping/max_rotation` should both be set to 0
+
+For the purposes of the [Pointing the Way](https://arxiv.org/abs/2309.08731) paper, this only needs to be set in the `radar_lidar_config.yaml` file, as the `lidar_config.yaml` file is used for map generation only. 
+
+Below is an example of a directory contained within `vtr_results`. This directory contains localization results for a `radar_lidar` set up. The reference trajectory is `boreas-2020-11-26-13-58`, with the odometry (teach) results contained in the `radar_lidar/boreas-2020-11-26-13-58/boreas-2020-11-26-13-58` directory and the localization (repeat) results generated from `boreas-2020-12-04-14-00` contained in the `radar_lidar/boreas-2020-11-26-13-58/boreas-2020-12-04-14-00` directory. We can see that we succesfully collected the raw pointcloud by the presence of the `radar_raw_point_cloud` directory. A similar directory structure should be present for each localization result.
+
+<img src="https://github.com/lisusdaniil/mm_masking/assets/26841447/4bf9ab01-1fbc-4cf7-a4be-69e26b222956" width="300">
 
