@@ -1,9 +1,6 @@
 [submodule "pyboreas"]
 	path = external/pyboreas
 	url = https://github.com/utiasASRL/pyboreas.git
-[submodule "external/ICP_simulator"]
-	path = external/ICP_simulator
-	url = git@github.com:utiasASRL/ICP_simulator.git
 [submodule "external/dICP"]
 	path = external/dICP
 	url = git@github.com:lisusdaniil/dICP.git
