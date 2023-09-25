@@ -153,3 +153,4 @@ Below is an example of a directory contained within `vtr_results`. This director
 
 <img src="https://github.com/lisusdaniil/mm_masking/assets/26841447/4bf9ab01-1fbc-4cf7-a4be-69e26b222956" width="300">
 
+# Training
