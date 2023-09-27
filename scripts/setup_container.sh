@@ -23,4 +23,4 @@ source $VTRRROOT/install/setup.bash
 source $ROOTDIR/venv/bin/activate
 
 export OMP_NUM_THREADS=8   # used to control the number of threads the container can use
-export NEPTUNE_API_TOKEN=eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4ODZkYzJmNS1iMWY3LTRlMWYtYWNjYy0zNTFhOWJjYjNiMTQifQ==
+export NEPTUNE_API_TOKEN=temp # Input your Neptune API here

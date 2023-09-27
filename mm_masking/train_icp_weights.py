@@ -1,7 +1,7 @@
 import argparse
 import torch
 from icp_weight_dataset import ICPWeightDataset
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from icp_weight_policy import LearnICPWeightPolicy
 import time
 import pickle
@@ -14,11 +14,8 @@ import os
 import neptune
 from neptune_pytorch import NeptuneLogger
 from neptune.utils import stringify_unsupported
-import torch.nn as nn
-from radar_utils import radar_polar_to_cartesian_diff, extract_bev_from_pts
+from radar_utils import extract_bev_from_pts
 import os.path as osp
-from datetime import datetime
-from pytz import timezone
 
 scaler = torch.cuda.amp.GradScaler()
 
@@ -348,24 +345,25 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
     return mean_loss_init, mean_loss_ones
 
 def main(args):
+    neptune_mode = "debug"
     run = neptune.init_run(
-        project="asrl/mm-icp",
-        api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4ODZkYzJmNS1iMWY3LTRlMWYtYWNjYy0zNTFhOWJjYjNiMTQifQ==",
-        mode="async"
+        project="temp",     # Your neptune project here
+        api_token="temp",   # Your neptune api here
+        mode=neptune_mode
     )
 
     params = {
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 
         # Dataset params
-        "num_train": -1,
-        "num_val": 512,
+        "num_train": 1,
+        "num_val": 1,
         "augment": True,
         "random": False,
         "float_type": torch.float32,
         "use_gt": False,
         "pos_std": 2.0,             # Standard deviation of position initial guess
-        "rot_std": 0.3,             # Standard deviation of rotation initial guess
+        "rot_std": 0.6,             # Standard deviation of rotation initial guess
         "gt_eye": True,             # Should ground truth transform be identity?
         "map_sensor": "lidar",
         "loc_sensor": "radar",
@@ -379,8 +377,8 @@ def main(args):
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
-        "num_epochs": 100,
-        "learning_rate": 1e-5,#5*1e-5,
+        "num_epochs": 30,
+        "learning_rate": 1e-4,#5*1e-5,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.05,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -390,8 +388,8 @@ def main(args):
         "b_thresh": 0.09, # Threshold for CFAR
 
         # Choose weights for loss function
-        "loss_icp_rot_weight": 0.0, # Weight for icp rotation error loss
-        "loss_icp_trans_weight": 0.0, # Weight for icp translation error loss
+        "loss_icp_rot_weight": 1.0, # Weight for icp rotation error loss
+        "loss_icp_trans_weight": 1.0, # Weight for icp translation error loss
         "loss_fft_mask_weight": 0.0, # Weight for fft mask loss
         "loss_map_pts_mask_weight": 1.0, # Weight for map pts mask loss
         "loss_cfar_mask_weight": 0.0, # Weight for cfar mask loss
@@ -419,9 +417,6 @@ def main(args):
                     "num_pts": params["num_pts_weight"]}
 
     # Load in all ground truth data based on the localization pairs provided in 
-    #train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-04-20-14-11']]
-    #val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2020-12-04-14-00']]
-
     train_loc_pairs = [["boreas-2020-11-26-13-58", "boreas-2020-12-01-13-26"],
                        ["boreas-2020-11-26-13-58", "boreas-2020-12-18-13-44"],
                        ["boreas-2020-11-26-13-58", "boreas-2021-02-02-14-07"],
@@ -436,30 +431,22 @@ def main(args):
                       ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
     val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-04-13-14-49']]
 
-    """
-    train_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-06-17-17-52'],
-                      ["boreas-2020-11-26-13-58", 'boreas-2021-03-02-13-38'],
-                      ["boreas-2020-11-26-13-58", 'boreas-2021-09-07-09-35']]
 
-    val_loc_pairs = [["boreas-2020-11-26-13-58", 'boreas-2021-05-06-13-19']]
-    """
     tic = time.time()
     train_dataset = ICPWeightDataset(loc_pairs=train_loc_pairs, params=params, dataset_type='train')
     toc = time.time()
     print("Time to load train dataset: ", toc-tic)
     tic = time.time()
-    test_dataset = ICPWeightDataset(loc_pairs=val_loc_pairs, params=params, dataset_type='test')
+    val_dataset = ICPWeightDataset(loc_pairs=val_loc_pairs, params=params, dataset_type='test')
     toc = time.time()
-    print("Time to load test dataset: ", toc-tic)
+    print("Time to load validation dataset: ", toc-tic)
     print("Dataset created")
     print("Number of training examples: ", len(train_dataset))
-    print("Number of validation examples: ", len(test_dataset))
-
-    #torch.autograd.set_detect_anomaly(True)
+    print("Number of validation examples: ", len(val_dataset))
 
     # Form iterators
     training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
-    validation_iterator = DataLoader(test_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
+    validation_iterator = DataLoader(val_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
     print("Dataloader created")
 
     # Initialize policy
@@ -484,7 +471,10 @@ def main(args):
     )
 
     # Form result directory
-    checkpoint_dir = osp.join('results', 'checkpoints')
+    if neptune_mode == "debug":
+        checkpoint_dir = osp.join('results', 'checkpoints', 'DEBUG')
+    else:
+        checkpoint_dir = osp.join('results', 'checkpoints', run["sys/id"].fetch())
     if not osp.exists(checkpoint_dir): os.makedirs(checkpoint_dir)
     best_policy_path = osp.join(checkpoint_dir, 'best_policy.pt')
 
@@ -506,7 +496,6 @@ def main(args):
     avg_norm, _, _, _, _  = validate_policy(policy, validation_iterator, device=params["device"],
                                          binary=params["binary_inference"], gt_eye=params["gt_eye"],
                                          neptune_run=run, epoch=-1)
-    #avg_norm = 1000
     # Compute best norm from total error
     best_norm = avg_norm[0, 0]
 
@@ -535,7 +524,7 @@ def main(args):
                                    device=params["device"], binary=params["binary_inference"], gt_eye=params["gt_eye"])
         toc = time.time()
         epoch_val_time = toc-tic
-        avg_sample_val_time = epoch_val_time/len(test_dataset)
+        avg_sample_val_time = epoch_val_time/len(val_dataset)
         if avg_norm[0, 0] < best_norm or epoch == 0:
             print("Saving best policy")
             best_norm = avg_norm[0, 0]
@@ -581,8 +570,7 @@ def main(args):
         # Save checkpoint
         curr_checkpoint_path = osp.join(checkpoint_dir, "epoch_{}.pt".format(epoch))
         torch.save(policy.state_dict(), curr_checkpoint_path)
-        run[npt_logger.base_namespace]["model_checkpoints/my_model"].upload(curr_checkpoint_path)
-
+        run[npt_logger.base_namespace]["model_checkpoints/"].upload_files(checkpoint_dir)
 
     # Do final validation using the best policy
     policy.load_state_dict(torch.load(best_policy_path))

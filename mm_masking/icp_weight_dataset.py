@@ -66,10 +66,13 @@ class ICPWeightDataset():
 
         # Assemble paths
         if map_sensor == 'lidar' and loc_sensor == 'radar':
-            sensor_dir_name = 'radar_lidar'
+            sensor_dir_name = 'radar_lidar_real'
             self.msg_prefix = 'radar_'
         elif map_sensor == 'radar' and loc_sensor == 'radar':
             sensor_dir_name = 'radar'
+            self.msg_prefix = ''
+        elif map_sensor == 'lidar' and loc_sensor == 'lidar':
+            sensor_dir_name = 'lidar'
             self.msg_prefix = ''
         else:
             raise ValueError("Invalid sensor combination")
@@ -150,7 +153,14 @@ class ICPWeightDataset():
                     continue
                 
                 # Extract vertex info
-                map_v = g_utils.get_closest_teach_vertex(loc_v)
+                try:
+                    map_v = g_utils.get_closest_teach_vertex(loc_v)
+                except g_utils.GraphError:
+                    # Sometimes will trigger "Graph is malformed, repeat pass does not connect to teach vertex."
+                    # Not 100% sure why this happens on runs that have an otherwise
+                    # good error, but just skip this for training
+                    print("Skipping vertex ", loc_v, "due to malformed graph error")
+                    continue
                 map_ptr = map_v.get_data("pointmap_ptr")
                 map_v = pair_graph.get_vertex(map_ptr.map_vid)
 
@@ -158,35 +168,39 @@ class ICPWeightDataset():
                 loc_stamp = int(loc_v.stamp * 1e-3)
                 map_stamp = int(map_v.stamp * 1e-3)
 
-                # Ensure radar image exists
-                loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
-                #if network_input_type == 'cartesian':
-                #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + '.png')
-                #else:
-                
-                loc_radar_path = loc_radar_fft_path
-                if not osp.exists(loc_radar_path):
-                    continue
-
-                # Ensure CFAR of image exists, if it does not, create one
-                # This is done to speed up training so that CFAR image does not need to be created every time
-                #cfar_dir = osp.join(data_dir, 'cfar', loc_seq, network_input_type, str(a_thresh) + '_' + str(b_thresh))
-                cfar_dir = osp.join(data_dir, 'cfar', loc_seq, 'polar', str(a_thresh) + '_' + str(b_thresh))
-                if not osp.exists(cfar_dir):
-                    os.makedirs(cfar_dir)
-                loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + '.png')
-                if not osp.exists(loc_cfar_path):
-                    loc_radar_img = cv2.imread(loc_radar_fft_path, cv2.IMREAD_GRAYSCALE)
-                    fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
-                    fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
-                    azimuths = torch.tensor(azimuths, dtype=self.float_type).unsqueeze(0)
-                    az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type).unsqueeze(0)
-                    fft_cfar = cfar_mask(fft_data, self.polar_res, a_thresh=a_thresh, b_thresh=b_thresh, diff=False)
-
-                    # Save CFAR image
+                if not (map_sensor == 'lidar' and loc_sensor == 'lidar'):
+                    # Ensure radar image exists
+                    loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
                     #if network_input_type == 'cartesian':
-                    #    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.polar_res)
-                    cv2.imwrite(loc_cfar_path, 255*fft_cfar.squeeze(0).numpy())
+                    #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + '.png')
+                    #else:
+                    
+                    loc_radar_path = loc_radar_fft_path
+                    if not osp.exists(loc_radar_path):
+                        continue
+
+                    # Ensure CFAR of image exists, if it does not, create one
+                    # This is done to speed up training so that CFAR image does not need to be created every time
+                    #cfar_dir = osp.join(data_dir, 'cfar', loc_seq, network_input_type, str(a_thresh) + '_' + str(b_thresh))
+                    cfar_dir = osp.join(data_dir, 'cfar', loc_seq, 'polar', str(a_thresh) + '_' + str(b_thresh))
+                    if not osp.exists(cfar_dir):
+                        os.makedirs(cfar_dir)
+                    loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + '.png')
+                    if not osp.exists(loc_cfar_path):
+                        loc_radar_img = cv2.imread(loc_radar_fft_path, cv2.IMREAD_GRAYSCALE)
+                        fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
+                        fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
+                        azimuths = torch.tensor(azimuths, dtype=self.float_type).unsqueeze(0)
+                        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type).unsqueeze(0)
+                        fft_cfar = cfar_mask(fft_data, self.polar_res, a_thresh=a_thresh, b_thresh=b_thresh, diff=False)
+
+                        # Save CFAR image
+                        #if network_input_type == 'cartesian':
+                        #    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.polar_res)
+                        cv2.imwrite(loc_cfar_path, 255*fft_cfar.squeeze(0).numpy())
+                else:
+                    loc_radar_path = 0
+                    loc_cfar_path = 0
 
                 # Check that timestamps are matching to gt poses
                 assert loc_stamp == gt_loc_times[ii], "query: {}".format(loc_stamp)
@@ -198,12 +212,15 @@ class ICPWeightDataset():
 
                 # Save ground truth localization to map pose
                 T_gt_idx = torch.tensor(gt_T_s2_s1, dtype=float_type)
-
                 # Now that we have ground truth, we can filter the map points to know max point size
                 # We only do filtering for lidar and only if we dont already have
                 # pointcloud metadata. This is done to speed up data loading
                 if extract_pcs_metadata:
-                    curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix)
+                    if map_sensor == 'lidar' and loc_sensor == 'lidar':
+                        extract_raw_pts = False
+                    else:
+                        extract_raw_pts = True
+                    curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
                     assert curr_raw_pts.shape == curr_filt_pts.shape, 'Raw and filtered pointclouds dont match!'
 
                     map_pts_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_pts.T + T_map_sensor_robot[:3, 3:4]).T
@@ -213,6 +230,7 @@ class ICPWeightDataset():
 
                     # Plot for visualization
                     """
+                    print(ii)
                     map_pts_loc_frame = (T_gt_idx[:3,:3] @ map_pts_sensor_frame[:,:3].T + T_gt_idx[:3, 3:4]).T
                     plt.figure(figsize=(15,15))
                     plt.scatter(map_pts_loc_frame[:,0], map_pts_loc_frame[:,1], s=1.0, c='red')
@@ -221,9 +239,8 @@ class ICPWeightDataset():
                     plt.xlim([-80, 80])
                     plt.savefig('align.png')
                     plt.close()
-                    time.sleep(0.1)
+                    time.sleep(1.0)
                     """
-
 
                     if curr_raw_pts.shape[0] > local_max_loc_pts:
                         local_max_loc_pts = curr_raw_pts.shape[0]
@@ -240,13 +257,21 @@ class ICPWeightDataset():
                     else:
                         T_init_idx = gt_T_s2_s1
                 else:
-                    xi_rand = torch.rand((6,1), dtype=float_type)
-                    # Zero out z, pitch, and roll
-                    xi_rand[2:5] = 0.0
-                    # Scale x and y
-                    xi_rand[0:2] = pos_std*xi_rand[0:2]
-                    # Scale yaw
-                    xi_rand[5] = rot_std*xi_rand[5]
+                    if dataset_type == 'train':
+                        xi_rand = 2 * torch.rand((6,1), dtype=float_type) - 1
+                        # Scale x and y
+                        xi_rand[0:2] = pos_std*xi_rand[0:2]
+                        # Scale yaw
+                        xi_rand[5] = rot_std*xi_rand[5]
+                        # Zero out z, pitch, and roll
+                        xi_rand[2:5] = 0.0
+                    else:
+                        #xi_rand = 2 * torch.rand((6,1), dtype=float_type) - 1
+                        xi_phi = np.random.normal(0.0, rot_std)
+                        xi_x = np.random.normal(0.0, pos_std)
+                        xi_y = np.random.normal(0.0, pos_std)
+                        xi_rand = torch.tensor([[xi_x], [xi_y], [0.0], [0.0], [0.0], [xi_phi]], dtype=float_type)
+
                     T_rand = Transformation(xi_ab=xi_rand)
                     if gt_eye:
                         T_init_idx = T_rand.matrix() # @ identity
@@ -306,87 +331,28 @@ class ICPWeightDataset():
         scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
 
-        """
-        plt.figure(figsize=(15,15))
-        plt.scatter(map_pc[:,0], map_pc[:,1], s=1.0, c='red')
-        #plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
-        plt.scatter(scan_pc_filt[:,0], scan_pc_filt[:,1], s=0.5, c='blue')
-        # plt.scatter(scan_pc[:,0], scan_pc[:,1], s=0.5, c='green')
-        #plt.scatter(curr_pts_map_frame[:,0], curr_pts_map_frame[:,1], s=0.5, c='green')
-        plt.ylim([-80, 80])
-        plt.xlim([-80, 80])
-        plt.savefig('align.png')
-        plt.close()
-        """
+        if not (self.map_sensor == 'lidar' and self.loc_sensor == 'lidar'):
+            # Load in fft data
+            loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
+            fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
+            fft_data = torch.tensor(fft_data, dtype=self.float_type)
+            azimuths = torch.tensor(azimuths, dtype=self.float_type)
+            az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
 
-        # Load in fft data
-        #loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        #if self.network_input_type == 'cartesian':
-        #    fft_data = torch.tensor(loc_radar_img, dtype=self.float_type)/255.0
-        #else:
-        #    raise NotImplementedError('Only cartesian input is supported for now')
-        loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
-        fft_data = torch.tensor(fft_data, dtype=self.float_type)
-        azimuths = torch.tensor(azimuths, dtype=self.float_type)
-        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+            fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
+            fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
 
-        fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
+            # Deal with data augmentation
+            if self.augment:
+                scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar = \
+                    self.augment_data(scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar)
 
-        """
-        print(fft_data.shape)
-        print(azimuths.shape)
-        cart_indeces = point_to_cart_idx(scan_pc_raw.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
-        fft_data_bev = radar_polar_to_cartesian_diff(fft_data.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res)
-        fft_data_bev = fft_data_bev.squeeze(0)
-        figure = plt.figure(figsize=(15,15))
-        plt.imshow(fft_data_bev, cmap='gray')
-        plt.scatter(cart_indeces[0,:,1], cart_indeces[0,:,0], s=2.5, c='red')
-        plt.savefig('fft_og.png')
-        plt.close()
-        """
-
-        # Deal with data augmentation
-        if self.augment:
-            scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar = \
-                self.augment_data(scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar)
-
-        if self.network_input_type == 'cartesian':
-            fft_data = radar_polar_to_cartesian_diff(fft_data.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
-            fft_cfar = radar_polar_to_cartesian_diff(fft_cfar.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
-        # DELETE
-        """
-        raw_indeces = point_to_cart_idx(scan_pc_raw.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
-        filt_indeces = point_to_cart_idx(scan_pc_filt.unsqueeze(0), cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
-        
-        map_pc_idx = map_pc[torch.abs(map_pc[:,0]) < 100].unsqueeze(0)
-        map_indeces = point_to_cart_idx(map_pc_idx, cart_resolution=0.2384, cart_pixel_width=640, min_to_plus_1=False)
-        figure = plt.figure(figsize=(15,15))
-        plt.imshow(fft_data, cmap='gray')
-        plt.scatter(map_indeces[0,:,1], map_indeces[0,:,0], s=2.5, c='red')
-        plt.scatter(raw_indeces[0,:,1], raw_indeces[0,:,0], s=2.5, c='blue')
-        #plt.scatter(filt_indeces[0,:,1], filt_indeces[0,:,0], s=2.5, c='green')
-        plt.savefig('fft_aug.png')
-        plt.close()
-        time.sleep(2.0)
-        #adsfda
-        
-        
-        map_pc_batch = torch.stack([map_pc, map_pc+10], dim=0)
-        print(map_pc_batch.shape)
-        map_pt_mask = extract_bev_from_pts(map_pc_batch)
-
-        map_pt_mask = map_pt_mask[0]
-
-        figure = plt.figure(figsize=(15,15))
-        #plt.imshow(fft_data, cmap='gray')
-        plt.imshow(map_pt_mask.squeeze(0), cmap='gray')
-        plt.savefig('map_pt_mask.png')
-        plt.close()
-        time.sleep(2.0)
-        fadsdfsa
-        """
+            if self.network_input_type == 'cartesian':
+                fft_data = radar_polar_to_cartesian_diff(fft_data.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
+                fft_cfar = radar_polar_to_cartesian_diff(fft_cfar.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
+        else:
+            fft_data = 0.0
+            fft_cfar = 0.0
 
         loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
                     'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
@@ -400,7 +366,12 @@ class ICPWeightDataset():
         graph_id = self.graph_id_vector[idx]
         pair_graph = self.graph_list[graph_id]
         vertex = pair_graph.get_vertex(v_id)
-        curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, vertex, msg_prefix=self.msg_prefix)
+        if self.map_sensor == 'lidar' and self.loc_sensor == 'lidar':
+            extract_raw_pts = False
+        else:
+            extract_raw_pts = True
+        
+        curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, vertex, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
         
         # Make scan_pc batchable
         curr_raw_pts = torch.from_numpy(curr_raw_pts)
@@ -440,7 +411,7 @@ class ICPWeightDataset():
         p_in_s = map_pts_loc_frame
         elev = torch.abs(torch.atan2(p_in_s[:,2], torch.sqrt(p_in_s[:,0] * p_in_s[:,0] + p_in_s[:,1] * p_in_s[:,1])))
         z_norm = torch.abs(map_norms_loc_frame[:,2])
-        if self.map_sensor == 'lidar':
+        if self.loc_sensor == 'radar' and self.map_sensor == 'lidar':
             valid_pts = (elev <= elevation_threshold) & (z_norm <= z_normal_threshold)
         else:
             valid_pts = torch.ones((map_pts_loc_frame.shape[0],), dtype=torch.bool)
@@ -479,3 +450,47 @@ class ICPWeightDataset():
         fft_cfar = torch.roll(fft_cfar, -min_az_idx.item(), dims=0)
 
         return scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar
+
+    def get_item_from_loc_timestamp(self, loc_stamp_req):
+        # Find the index of the loc_stamp
+        # We know the path will contain the loc_stamp
+        loc_radar_path_to_find = str(loc_stamp_req) + '.png'
+        # Find loc_radar_path_to_find in self.loc_radar_path_list
+        index = [i for i, s in enumerate(self.loc_radar_path_list) if loc_radar_path_to_find in s]
+        assert index != [], 'loc_stamp_req not found in dataset'
+        index = index[0]
+        # Load in initial guess
+        T_init = self.T_loc_init[index]
+
+        # Load in ground truth localization to map pose
+        T_ml_gt = self.T_loc_gt[index]
+
+        # Load in pointclouds and timestamps
+        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
+        assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
+        assert loc_stamp_req == loc_stamp, 'loc_stamp_req does not match loc_stamp'
+
+        loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
+        fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
+        fft_data = torch.tensor(fft_data, dtype=self.float_type)
+        azimuths = torch.tensor(azimuths, dtype=self.float_type)
+        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
+
+        fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
+        fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
+
+        # Deal with data augmentation
+        if self.augment:
+            scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar = \
+                self.augment_data(scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar)
+
+        if self.network_input_type == 'cartesian':
+            fft_data = radar_polar_to_cartesian_diff(fft_data.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
+            fft_cfar = radar_polar_to_cartesian_diff(fft_cfar.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
+
+        loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
+                    'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
+        map_data = {'pc': map_pc, 'timestamp' : map_stamp}
+        T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
+
+        return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data}

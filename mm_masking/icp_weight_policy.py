@@ -124,7 +124,7 @@ class LearnICPWeightPolicy(nn.Module):
 
         return nn.Sequential(*modules)
 
-    def forward(self, batch_scan, batch_map, T_init, binary=False, override_mask=None, neptune_run=None, epoch=0, batch_idx=0):
+    def forward(self, batch_scan, batch_map, T_init, binary=False, override_mask=None, neptune_run=None, epoch=0, batch_idx=0, mask_only=False):
         # If override_mask is not None, then don't use network to get mask, just use override_mask
         # Extract points
         fft_data = batch_scan['fft_data'].to(self.device)#.requires_grad_(True)
@@ -132,10 +132,6 @@ class LearnICPWeightPolicy(nn.Module):
         scan_pc_raw = batch_scan['raw_pc'].to(self.device)
         #map_pc_paths = batch_map['pc_path']
         map_pc = batch_map['pc'].to(self.device)
-
-        # Form weight fft "scan", where each non-zero pixel is the weight for the 
-        # corresponding pointcloud point at the same pixel
-        fft_weights = torch.where(fft_cfar > 0.0, 1.0, 0.0)
 
         if override_mask is None:
             input_data = None
@@ -199,9 +195,13 @@ class LearnICPWeightPolicy(nn.Module):
         if binary:
             weight_mask = torch.where(weight_mask > 0.5, 1.0, 0.0)
 
-        # Extract weights correcponding to scan_pc
-        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(weight_mask, scan_pc_raw)
+        if mask_only:
+            return weight_mask
 
+        # Extract weights correcponding to scan_pc
+        # Check if weight mask is as 1's, then dont need to extract
+        weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(weight_mask, scan_pc_raw)
+        
         # Save params
         self.mean_num_pts = mean_num_non0
         self.max_w = max_w
@@ -213,8 +213,10 @@ class LearnICPWeightPolicy(nn.Module):
         non0_pts = non0_x * non0_y
         self.mean_all_pts = torch.sum(non0_pts) / scan_pc_raw.shape[0]
 
-        del fft_data, fft_cfar, fft_weights
+        del fft_data, fft_cfar
         torch.cuda.empty_cache()
+
+        scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
 
         if neptune_run is not None and batch_idx <= 10:
             # Plot the scan and map pointclouds
@@ -222,7 +224,7 @@ class LearnICPWeightPolicy(nn.Module):
             # Only use map_pc_0 that are less than self.ICP_alg.target_pad_val
             map_pc_0 = map_pc_0[np.abs(map_pc_0[:, 0]) < self.ICP_alg.target_pad_val]
             map_pc_0 = map_pc_0[np.abs(map_pc_0[:, 1]) < self.ICP_alg.target_pad_val]
-            scan_pc_0 = scan_pc_raw[0].detach().cpu().numpy()
+            scan_pc_0 = scan_pc_filt[0].detach().cpu().numpy()
             # Only use scan_pc_0 points that aren't exactly 0
             scan_w_0 = weights[0].detach().cpu().numpy()
             scan_w_0 = scan_w_0[np.abs(scan_pc_0[:,0]) > 0.05]
@@ -263,7 +265,6 @@ class LearnICPWeightPolicy(nn.Module):
 
         # Pass the modified fft_data through ICP
         del scan_pc_raw
-        scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
         
         # If we are training and don't want to use ICP, return initial guess
         if self.training and not self.use_ICP_4_train:
