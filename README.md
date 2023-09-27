@@ -154,3 +154,14 @@ Below is an example of a directory contained within `vtr_results`. This director
 <img src="https://github.com/lisusdaniil/mm_masking/assets/26841447/4bf9ab01-1fbc-4cf7-a4be-69e26b222956" width="300">
 
 # Training
+The training is integrated with [Neptune](https://neptune.ai/) for tracking purposes. In order to make use of the code as-is, please first create an account and generate a personal API and project. Once an API is generated, enter the API into the corresponding line in `setup_container.sh`.
+
+In order to run training, enter the container (with properly sourced `setup_container.sh`), and run
+
+```
+python train_icp_weights.py
+```
+
+At the top of the `main()` function you will need to enter your Neptune project and API token. Subsequently, there are a large number of parameters that can be changed to change the behaviour of training.
+
+If you have any questions, please reach out to <daniil.lisus@mail.utoronto.ca>!
