@@ -10,4 +10,4 @@ neptune-pytorch
 cmake
 -e ./external/dICP
 -e ./external/pyboreas
--e ./external/vtr3_python
+-e ./external/vtr3_pose_graph

@@ -10,6 +10,6 @@
 [submodule "external/vtr_testing_radar"]
 	path = external/vtr_testing_radar
 	url = git@github.com:cheneyuwu/vtr_testing_radar.git
-[submodule "external/vtr3_python"]
-	path = external/vtr3_python
-	url = git@github.com:a-krawciw/vtr3_python.git
+[submodule "external/vtr3_pose_graph"]
+	path = external/vtr3_pose_graph
+	url = https://github.com/utiasASRL/vtr3_pose_graph
