@@ -33,11 +33,14 @@ def convert_points_to_frame(pts: np.ndarray, frame: Transformation):
     new_points = (frame.matrix() @ new_points)
     return new_points[:3, :]
 
-def extract_points_and_map(graph: Graph, v: Vertex, msg_prefix=''):
-    raw_msg = msg_prefix + 'raw_point_cloud'
-    curr_raw_pts, _, = extract_points_from_vertex(v, msg=raw_msg, T_zero=True)
+def extract_points_and_map(graph: Graph, v: Vertex, msg_prefix='', extract_raw_pts = True):
     filtered_msg = msg_prefix + 'filtered_point_cloud'
     curr_filtered_pts, _, = extract_points_from_vertex(v, msg=filtered_msg, T_zero=True)
+    if extract_raw_pts:
+        raw_msg = msg_prefix + 'raw_point_cloud'
+        curr_raw_pts, _, = extract_points_from_vertex(v, msg=raw_msg, T_zero=True)
+    else:
+        curr_raw_pts = curr_filtered_pts
 
     teach_v = g_utils.get_closest_teach_vertex(v)
     map_ptr = teach_v.get_data("pointmap_ptr")

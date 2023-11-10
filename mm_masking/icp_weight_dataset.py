@@ -17,7 +17,7 @@ from pyboreas.utils.utils import (
     rotToRollPitchYaw,
 )
 import vtr_pose_graph
-from vtr_pose_graph.graph_factory import Rosbag2GraphFactory
+from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
 import vtr_pose_graph.graph_utils as g_utils
 from vtr_pose_graph.graph_iterators import TemporalIterator
 from utils.extract_graph import extract_points_and_map
@@ -66,7 +66,7 @@ class ICPWeightDataset():
 
         # Assemble paths
         if map_sensor == 'lidar' and loc_sensor == 'radar':
-            sensor_dir_name = 'radar_lidar_real'
+            sensor_dir_name = 'radar_lidar'
             self.msg_prefix = 'radar_'
         elif map_sensor == 'radar' and loc_sensor == 'radar':
             sensor_dir_name = 'radar'

@@ -283,7 +283,6 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
         model.eval()
     loss_init_hist = []
     loss_ones_hist = []
-
     with torch.no_grad():
         for i_batch, batch in enumerate(iterator):
             #print("Batch: ", i_batch)
@@ -344,7 +343,7 @@ def generate_baseline(model, iterator, baseline_type="train", device='cpu',
 
     return mean_loss_init, mean_loss_ones
 
-def main(args):
+def main():
     neptune_mode = "debug"
     run = neptune.init_run(
         project="temp",     # Your neptune project here
@@ -372,13 +371,14 @@ def main(args):
                                     # happens after log transform if log transform is true
 
         # Iterator params
-        "batch_size": 16,
+        "batch_size_train": 16,
+        "batch_size_test": 32,
         "shuffle": True,
 
         # Training params
         "icp_type": "pt2pt", # Options are "pt2pt" and "pt2pl"
         "num_epochs": 30,
-        "learning_rate": 1e-4,#5*1e-5,
+        "learning_rate": 1e-4,
         "leaky": False,   # True or false for leaky relu
         "dropout": 0.05,   # Dropout rate, set 0 for no dropout
         "batch_norm": False, # True or false for batch norm
@@ -445,8 +445,14 @@ def main(args):
     print("Number of validation examples: ", len(val_dataset))
 
     # Form iterators
-    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=params["shuffle"], num_workers=4, drop_last=True)
-    validation_iterator = DataLoader(val_dataset, batch_size=2*params["batch_size"], shuffle=False, num_workers=4, drop_last=True)
+    drop_last_train = True
+    drop_last_test = True
+    if params["num_train"] < params["batch_size_train"]:
+        drop_last_train = False
+    if params["num_val"] < params["batch_size_test"]:
+        drop_last_test = False
+    training_iterator = DataLoader(train_dataset, batch_size=params["batch_size_train"], shuffle=params["shuffle"], num_workers=4, drop_last=drop_last_train)
+    validation_iterator = DataLoader(val_dataset, batch_size=params["batch_size_test"], shuffle=False, num_workers=4, drop_last=drop_last_test)
     print("Dataloader created")
 
     # Initialize policy
@@ -581,11 +587,4 @@ def main(args):
     run.stop()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()    
-    parser.add_argument("--gt_data_dir", help="directory of training data", default='../data/localization_gt')
-    parser.add_argument("--pc_dir", help="directory of training data", default='../data/pointclouds')
-    parser.add_argument("--radar_dir", help="directory of training data", default='../data/radar')
-
-    args = parser.parse_args()
-
-    main(args)
+    main()
