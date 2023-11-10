@@ -16,9 +16,6 @@ else
 	-e ROOTDIR=$ROOTDIR \
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
 	-v ${HOME}/.Xauthority:${HOME}/.Xauthority:rw \
-	-v /raid/dli:/raid/dli:rw \
-    -v /raid/krb:/raid/krb:rw \
-	-v /nas/ASRL/2021-Boreas:/nas/ASRL/2021-Boreas \
 	-v $ROOTDIR:$ROOTDIR:rw \
 	-w $ROOTDIR mm_masking_temp
 fi
