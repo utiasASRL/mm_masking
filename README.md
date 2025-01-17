@@ -52,7 +52,7 @@ This gets run every time the `run_docker.sh` script gets run and so only needs t
 
 # Data Generation
 ## Odometry (Teach) and Localization (Repeat)
-This pipeline is trained, tested, and validated using the Teach & Repeat (T&R) framework on the [Boreas](https://www.boreas.utias.utoronto.ca/#/) dataset. A map is constructed during the Teach pass and subsequent Repeat passes are localized against that map. This code is contained in the `vtr3` and `vtr_testing_radar` submodules.
+This pipeline is trained, tested, and validated using the Teach & Repeat (T&R) framework on the [Boreas](https://www.boreas.utias.utoronto.ca/#/) dataset. A map is constructed during the Teach pass and subsequent Repeat passes are localized against that map. This code is contained in the `vtr3` and `boreas_vtr_wrapper` submodules.
 
 Make sure that `setup_container.sh` has been run, as it defines all required variables and sources all required packages!
 

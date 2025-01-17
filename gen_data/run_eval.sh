@@ -14,5 +14,5 @@ export VTRRRESULT=${VTRRESULT}/${SENSOR}
 # Load in param file based on sensor
 PARAM_FILE=${ROOTDIR}/gen_data/config/${SENSOR}_config.yaml
 
-# Call corresponding script from vtr_testing_radar
+# Call corresponding script from boreas_vtr_wrapper
 bash ${VTRRROOT}/src/vtr_testing_${SENSOR}/script/test_${MODE}_eval.sh ${ODO_INPUT} ${PARAM_FILE}

@@ -4,6 +4,6 @@
 cd $ROOTDIR
 source scripts/build_vtr3.sh
 
-# Rebuild vtr_testing_radar
+# Rebuild boreas_vtr_wrapper
 cd $ROOTDIR
-source scripts/build_vtr_testing_radar.sh
+source scripts/build_boreas_vtr_wrapper.sh

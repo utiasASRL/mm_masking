@@ -1,7 +1,7 @@
 # Set up VTR directory pointers
 export VTRROOT=$ROOTDIR                   # This is required for some internal scripts
 export VTRSRC=$ROOTDIR/external/vtr3
-export VTRRROOT=$ROOTDIR/external/vtr_testing_radar
+export VTRRROOT=$ROOTDIR/external/boreas_vtr_wrapper
 export VTRRESULT=$ROOTDIR/data/vtr_results  # POINT THIS TO WHERE YOU WANT TO STORE RESULTS
 export VTRRDATA=$ROOTDIR/data/vtr_data      # POINT THIS TO DATA DIRECTORY
 
