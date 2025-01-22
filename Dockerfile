@@ -1,9 +1,13 @@
-FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+CMD ["/bin/bash"]
 
 ARG GROUPID=0
 ARG USERID=0
 ARG USERNAME=root
 ARG HOMEDIR=/root
+ARG ROOTDIR=/root/mm_masking
+ARG CUDA_ARCH="8.9"
 
 RUN if [ ${GROUPID} -ne 0 ]; then addgroup --gid ${GROUPID} ${USERNAME}; fi \
   && if [ ${USERID} -ne 0 ]; then adduser --disabled-password --gecos '' --uid ${USERID} --gid ${GROUPID} ${USERNAME}; fi
@@ -12,6 +16,24 @@ RUN if [ ${GROUPID} -ne 0 ]; then addgroup --gid ${GROUPID} ${USERNAME}; fi \
 ARG NUMPROC=12
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+## Switch to root to install dependencies
+USER ${USERID}:${GROUPID}
+
+ENV VTRROOT=${ROOTDIR}/external/vtr3
+ENV VTRSRC=${VTRROOT}/src \
+  VTRDATA=${VTRROOT}/data \
+  VTRTEMP=${VTRROOT}/temp \
+  VTRMODELS=${VTRROOT}/models \
+  GRIZZLY=${VTRROOT}/grizzly \
+  WARTHOG=${VTRROOT}/warthog \
+  VTRUI=${VTRSRC}/main/src/vtr_gui/vtr_gui/vtr-gui
+
+# Echo env variables
+RUN echo "The value of MY_VAR is: $VTRROOT"
+
+RUN echo "alias build_ui='npm --prefix ${VTRUI} install ${VTRUI}; npm --prefix ${VTRUI} run build'" >> ~/.bashrc
+RUN echo "alias build_vtr='source /opt/ros/humble/setup.bash; cd ${VTRSRC}/main; colcon build --symlink-install'" >> ~/.bashrc
 
 ## Switch to root to install dependencies
 USER 0:0
@@ -24,6 +46,11 @@ RUN apt update && apt install -q -y libx11-dev libxrandr-dev libxinerama-dev lib
 RUN apt update && apt install -q -y freeglut3-dev
 RUN apt update && apt install -q -y python3 python3-distutils python3-pip
 RUN apt update && apt install -q -y libeigen3-dev
+RUN apt update && apt install -q -y libsqlite3-dev sqlite3
+RUN apt install -q -y libc6-dbg gdb valgrind
+
+## Dependency for navtech radar
+RUN apt update && apt install -q -y apt libbotan-2-dev
 
 ## Install PROJ (8.2.0) (this is for graph_map_server in vtr_navigation)
 RUN apt update && apt install -q -y cmake libsqlite3-dev sqlite3 libtiff-dev libcurl4-openssl-dev
@@ -51,6 +78,8 @@ RUN apt update && apt install -q -y \
   ros-humble-perception-pcl ros-humble-pcl-ros \
   ros-humble-rmw-cyclonedds-cpp
 
+RUN apt install ros-humble-tf2-tools
+
 RUN mkdir -p ${HOMEDIR}/.matplotcpp && cd ${HOMEDIR}/.matplotcpp \
   && git clone https://github.com/lava/matplotlib-cpp.git . \
   && mkdir -p ${HOMEDIR}/.matplotcpp/build && cd ${HOMEDIR}/.matplotcpp/build \
@@ -69,7 +98,23 @@ RUN apt update && apt install -q -y \
   texlive-latex-extra \
   clang-format \
   htop \
-  wget
+  wget \
+  apt-utils \
+  vim
+
+## Install python dependencies
+RUN pip3 install \
+  tmuxp \
+  pyyaml \
+  pyproj \
+  scipy \
+  zmq \
+  flask \
+  flask_socketio \
+  eventlet \
+  python-socketio \
+  python-socketio[client] \
+  websocket-client
 
 # Install aws dependencies for boreas dataset installation
 RUN apt update && apt upgrade -q -y zip unzip
@@ -77,8 +122,9 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
   unzip awscliv2.zip && \
   ./aws/install
 
-# Install vim
-RUN apt update && apt install -q -y vim
+
+## Install opencv 4.10.0
+RUN apt install -q -y libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
 
 # Install this for some potential cuda bugs
 RUN apt install nvidia-modprobe
@@ -98,12 +144,57 @@ RUN pip3 install \
 
 RUN apt install -q -y doxygen
 
+RUN mkdir -p ${HOMEDIR}/opencv && cd ${HOMEDIR}/opencv \
+&& git clone https://github.com/opencv/opencv.git . 
+
+RUN cd ${HOMEDIR}/opencv && git checkout 4.10.0
+RUN mkdir -p ${HOMEDIR}/opencv_contrib && cd ${HOMEDIR}/opencv_contrib \
+&& git clone https://github.com/opencv/opencv_contrib.git . 
+RUN cd ${HOMEDIR}/opencv_contrib && git checkout 4.10.0 
+
+RUN apt install -q -y build-essential cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
+# # generate Makefiles (note that install prefix is customized to: /usr/local/opencv_cuda)
+
+# RUN mkdir -p ${HOMEDIR}/opencv/build && cd ${HOMEDIR}/opencv/build \
+# && cmake -D CMAKE_BUILD_TYPE=RELEASE \
+# -D CMAKE_INSTALL_PREFIX=/usr/local/opencv_cuda \
+# -D OPENCV_EXTRA_MODULES_PATH=${HOMEDIR}/opencv_contrib/modules \
+# -D PYTHON_DEFAULT_EXECUTABLE=/usr/bin/python3.10 \
+# -DBUILD_opencv_python2=OFF \
+# -DBUILD_opencv_python3=ON \
+# -DWITH_OPENMP=ON \
+# -DWITH_CUDA=ON \
+# -D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-11.8 \
+# -DOPENCV_ENABLE_NONFREE=ON \
+# -D OPENCV_GENERATE_PKGCONFIG=ON \
+# -DWITH_TBB=ON \
+# -DWITH_GTK=ON \
+# -DWITH_OPENMP=ON \
+# -DWITH_FFMPEG=ON \
+# -DBUILD_opencv_cudacodec=OFF \
+# -D BUILD_EXAMPLES=OFF \
+# -D CUDA_ARCH_BIN=$CUDA_ARCH ..  && make -j16 && make install
+
+ENV LD_LIBRARY_PATH=/usr/local/opencv_cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+
 ##Install LibTorch
-RUN curl https://download.pytorch.org/libtorch/cu117/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu117.zip --output libtorch.zip
+RUN curl https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu118.zip --output libtorch.zip
 RUN unzip libtorch.zip -d /opt/torch
+RUN rm libtorch.zip
 ENV TORCH_LIB=/opt/torch/libtorch
 ENV LD_LIBRARY_PATH=$TORCH_LIB/lib:${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 ENV CMAKE_PREFIX_PATH=$TORCH_LIB:$CMAKE_PREFIX_PATH
+  
+RUN apt install swig liblapack-dev libmetis-dev -y -q --install-recommends
+RUN mkdir -p ${HOMEDIR}/.casadi && cd ${HOMEDIR}/.casadi \
+  && git clone https://github.com/utiasASRL/casadi.git .
+RUN cd ${HOMEDIR}/.casadi \
+  && mkdir -p build && cd build \
+  && cmake build -DWITH_PYTHON=ON -DWITH_PYTHON3=ON -DWITH_IPOPT=ON -DWITH_BUILD_IPOPT=ON -DWITH_BUILD_REQUIRED=ON -DWITH_SELFCONTAINED=ON .. \
+  && make -j${NUMPROC} install
+ENV PYTHONPATH=${PYTHONPATH}:/usr/local
+ENV LD_LIBRARY_PATH=/usr/local/casadi:${LD_LIBRARY_PATH}
+
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility,graphics
 
 # Set up entrypoint
