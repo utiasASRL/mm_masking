@@ -41,8 +41,9 @@
         distance_warning: 30.0
 
       save_odometry_result: true
+      save_odometry_vel_result : true
       save_localization_result: true
-      visualize: true
+      visualize: false
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -86,12 +87,12 @@
         fov_center: 45.0
         fov: 60.0
 
-        visualize: true
+        visualize: false
 
       filtering:
         type: lidar.preprocessing
 
-        num_threads: 10
+        num_threads: 1
 
         crop_range: 60.0
 
@@ -112,7 +113,7 @@
 
         cluster_num_sample: 20000 # maxnumber of sample after removing isolated points
 
-        visualize: true
+        visualize: false
 
     odometry:
       icp:
@@ -135,7 +136,7 @@
         vp_cov: [1000.0, 0.001, 1000.0, 1000.0, 1000.0, 1000.0]
 
         # ICP parameters
-        num_threads: 10
+        num_threads: 1
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 3.0
@@ -151,7 +152,7 @@
         # threshold
         min_matched_ratio: 0.0
 
-        visualize: true
+        visualize: false
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
@@ -163,7 +164,7 @@
 
         point_life_time: 10.0
 
-        visualize: true
+        visualize: false
 
       vertex_test:
         type: lidar.vertex_test
@@ -182,7 +183,7 @@
 
         map_version: "pointmap"
 
-        visualize: true
+        visualize: false
 
       icp:
         type: lidar.localization_icp
@@ -190,7 +191,7 @@
         use_pose_prior: true
 
         # ICP parameters
-        num_threads: 10
+        num_threads: 1
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 5.0

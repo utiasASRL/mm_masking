@@ -14,8 +14,8 @@
         # "tactic.module.graph_mem_manager",
         # pipeline specific
         "radar.pipeline",
-        # "radar.navtech_extractor",
-        "radar.preprocessing",
+        # "radar.pc_extractor",
+        # "radar.preprocessing",
         # "radar.mcransac",
         #"radar.odometry_icp",
         # "radar.vertex_test",
@@ -41,8 +41,9 @@
         distance_warning: 30.0
 
       save_odometry_result: true
+      save_odometry_vel_result : true
       save_localization_result: true
-      visualize: true
+      visualize: false
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -53,6 +54,7 @@
       preprocessing: [
           # preprocessing thread modules
           "conversion",
+          "extraction",
           "filtering",
         ]
 
@@ -75,54 +77,99 @@
       # submap creation thresholds
       submap_translation_threshold: 10.0 # in meters
       submap_rotation_threshold: 30.0 # in degrees
-      # save raw pointclouds for training
-      # can turn this off for testing
       save_raw_point_cloud: false
+      save_radar_images: false
 
     preprocessing:
       conversion:
-        type: radar.navtech_extractor
+        type: radar.offline_converter
+        cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
         radar_resolution: 0.0596
         range_offset: -0.31
-        detector: modified_cacfar # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
         minr: 2.0 # mininum detection distance
         maxr: 80.0 # maximum detection distance
+        beta: 0.049 # Doppler correction factor (set to 0 to turn this off)
+        # chirp_type:
+      extraction:
+        type: radar.pc_extractor
+        radar_resolution: 0.0596
+        range_offset: -0.31
+        detector: kstrongest # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
+        minr: 2.0 # mininum detection distance
+        maxr: 80.0 # maximum detection distance
+        save_pointcloud_overlay: false
         # TODO: make cart_resolution an integer mult of radar_resolution
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
         beta: 0.049 # Doppler correction factor (set to 0 to turn this off)
-        kstrong:
-          kstrong: 12 # k-strongest per azimuth to retain
-          threshold2: 0.0 # threshold for k-strongest (mult of mean)
-          threshold3: 0.216 # treshold for k-strongest (constant)
-        cen2018:
-          zq: 2.5
-          sigma: 8
-        cacfar:
-          width: 41
-          guard: 2
-          threshold: 1.0
-          threshold2: 0.0 # cfar: mult of mean, T = threshold * Z + threshold2 * mean + threshold3
-          threshold3: 0.08
+        kstrongest:
+          kstrong: 5 # k-strongest per azimuth to retain
+          static_threshold: 0.25 # Try 0.25 for older Navtech firmware
         oscfar:
-          width: 41
+          width: 101
           guard: 0
-          kstat: 20 # used in oscfar, kth statistic to return in window
-          threshold: 1.0
-          threshold2: 0.0 # cfar: mult of mean, T = threshold * Z + threshold2 * mean + threshold3
-          threshold3: 0.07
-        modified_cacfar:
-          width: 101 # Old: 101, New: 41
-          guard: 5 # Old: 5, New: 2
-          threshold: 1.0 # Old: 0.2, New: 1,.0
-          threshold2: 0.0 # Old: 4.0, New: 0.0 cfar: mult of mean, T = threshold * Z + threshold2 * mean + threshold3
-          threshold3: 0.09 # Old: 0.0, New: 0.08
+          kstat: 50 # used in oscfar, kth statistic to return in window
+          threshold: 120.0
+        tm_cfar:
+          width: 101
+          guard: 0
+          threshold: 100.0
+          N1: 30
+          N2: 30
+        cacfar:
+          width: 101
+          guard: 5
+          threshold: 55.0
+        cago_cfar:
+          width: 101
+          guard: 5
+          threshold: 25.0
+        caso_cfar:
+          width: 101
+          guard: 5
+          threshold: 3700.0
+        is_cfar:
+          width: 101
+          guard: 5
+          alpha_I: 0.075 # [0.01,10]
+          N_TI: 43 #[49,41]
+          beta_I: 15.0
+        vi_cfar:
+          width: 101
+          guard: 5
+          K_VI: 5.0 #[2.0-20.0][entierly CASO - Mostly CA/CAGO]
+          K_MR: 1.5 #1.5 [1.0-3] Fix at 1.5 if mean1/1.5 < mean2 < mean1*1.5, mean1=mean2
+          C_N: 400.0 # [20-1000] - Firmware dependent
+        cfear_kstrong:
+          width: 101
+          guard: 5
+          kstrong: 20
+          z_min: 0.35 #0.216
+          r: 0.5
+          f: 24.0
+        bfar:
+          width: 101
+          guard: 5
+          threshold: 15.0
+          static_threshold: 0.15
+        msca_cfar:
+          width: 101
+          guard: 5
+          threshold: 400.0
+          M: 10
+        cen2019:
+          width: 101
+          guard: 5
+          l_max: 300
+        cen2018:
+          zq: 2.75
+          sigma: 10
 
-        visualize: true
+        visualize: false
 
       filtering:
         type: radar.preprocessing
 
-        num_threads: 12 # number of threads for nearest neighbor search
+        num_threads: 1 # number of threads for nearest neighbor search
 
         voxel_downsample: false
         frame_voxel_size: 1.0 # grid size for frame voxelization in meters
@@ -134,9 +181,21 @@
         num_sample_linearity: 5000 # max number of sample after filtering based on linearity
         min_linearity_score: -1.0 # min linearity score (negative value means no filtering)
 
-        visualize: true
+        visualize: false
 
     odometry:
+      gyro:
+        type: radar.odometry_gyro
+        traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01]
+        gyro_cov: 1e-7
+
+        # steam parameters #TOTUNE
+        verbose: false
+        max_iterations: 3
+        
+      preintegration:
+        type: radar.odometry_preintegration
+
       mcransac:
         type: radar.mcransac
         tolerance: 0.1225 # matched with squared error less than this are inliers
@@ -151,7 +210,7 @@
         # BASD
         nbins: 16
         bin_size: 1
-        visualize: true
+        visualize: false
         filter_pc: false
         init_icp: false
 
@@ -166,26 +225,30 @@
         traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01]
 
         # ICP parameters
-        num_threads: 12
+        num_threads: 1
         first_num_steps: 2 # number of steps to with a greater matching distance threshold
         initial_max_iter: 4 # phase 1 max iterations
         initial_max_pairing_dist: 5.0 # phase 1 max pairing distance in meters
         initial_max_planar_dist: 5.0 # phase 1 max planar distance in meters
-        refined_max_iter: 1000 # phase 2 max iterations
+        refined_max_iter: 25 # phase 2 max iterations
         refined_max_pairing_dist: 5.0 # phase 2 max pairing distance in meters
         refined_max_planar_dist: 5.0 # phase 2 max planar distance in meters
         averaging_num_steps: 5 # averaging pose change over this number of steps until change is below a threshold at convergence
         huber_delta: 1.0 # huber loss threshold for ICP
         cauchy_k: 1.0
+        w_icp_diag: [1.0, 1.0, 1.0]
 
         # steam parameters
         verbose: false
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.0
+        min_matched_ratio: 0.75
+        max_trans_vel_diff: 2.60 # 1000.0 (or some large number) to disable
+        max_rot_vel_diff: 1.35 # 1000.0 (or some large number) to disable
+        max_transformation_diff: 1000.0 # 1000.0 (or some large number) to disable
 
-        visualize: true
+        visualize: false
 
       mapping:
         type: radar.odometry_map_maintenance
@@ -197,7 +260,7 @@
 
         point_life_time: 3.0 # point life time based on number of map updates
 
-        visualize: true
+        visualize: false
 
       vertex_test:
         type: radar.vertex_test
@@ -216,7 +279,7 @@
 
         map_version: "pointmap"
 
-        visualize: true
+        visualize: false
 
       icp:
         type: radar.localization_icp
@@ -224,12 +287,12 @@
         use_pose_prior: true
 
         # ICP parameters
-        num_threads: 12
+        num_threads: 1
         first_num_steps: 2
         initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 1000
+        refined_max_iter: 25
         refined_max_pairing_dist: 5.0
         refined_max_planar_dist: 5.0
         averaging_num_steps: 5
@@ -241,7 +304,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.0
+        min_matched_ratio: 0.75
 
       memory:
         type: "graph_mem_manager"
