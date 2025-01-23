@@ -7,3 +7,7 @@ source scripts/build_vtr3.sh
 # Rebuild boreas_vtr_wrapper
 cd $ROOTDIR
 source scripts/build_boreas_vtr_wrapper.sh
+
+# Re-source everything
+cd $ROOTDIR
+source scripts/setup_container.sh
