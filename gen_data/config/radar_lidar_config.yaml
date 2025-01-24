@@ -94,7 +94,7 @@
         type: radar.pc_extractor
         radar_resolution: 0.0596
         range_offset: -0.31
-        detector: kstrongest # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
+        detector: bfar # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
         minr: 2.0 # mininum detection distance
         maxr: 80.0 # maximum detection distance
         save_pointcloud_overlay: false
@@ -243,7 +243,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.75
+        min_matched_ratio: 0.5
         max_trans_vel_diff: 2.60 # 1000.0 (or some large number) to disable
         max_rot_vel_diff: 1.35 # 1000.0 (or some large number) to disable
         max_transformation_diff: 1000.0 # 1000.0 (or some large number) to disable
@@ -308,7 +308,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.0
+        min_matched_ratio: 0.5
 
         visualize: false
 

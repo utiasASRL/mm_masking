@@ -3,24 +3,24 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: false
+    log_debug: true
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
-        # "tactic",
-        # "tactic.pipeline",
-        # "tactic.module",
-        # "tactic.module.live_mem_manager",
-        # "tactic.module.graph_mem_manager",
+        "tactic",
+        "tactic.pipeline",
+        "tactic.module",
+        "tactic.module.live_mem_manager",
+        "tactic.module.graph_mem_manager",
         # pipeline specific
         "radar.pipeline",
-        # "radar.pc_extractor",
-        # "radar.preprocessing",
+        "radar.pc_extractor",
+         "radar.preprocessing",
         # "radar.mcransac",
-        #"radar.odometry_icp",
-        # "radar.vertex_test",
-        #"radar.localization_map_recall",
-        #"radar.localization_icp",
+        "radar.odometry_icp",
+        "radar.vertex_test",
+        "radar.localization_map_recall",
+        "radar.localization_icp",
       ]
 
     ############ tactic configuration ############
@@ -35,7 +35,7 @@
 
       chain:
         min_cusp_distance: 1.5
-        angle_weight: 7.0
+        angle_weight: 0.0
         search_depth: 5
         search_back_depth: 10
         distance_warning: 30.0
@@ -84,7 +84,7 @@
       conversion:
         type: radar.offline_converter
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
-        radar_resolution: 0.0596
+        radar_resolution: 0.0596 #0.0596, 0.0438
         range_offset: -0.31
         minr: 2.0 # mininum detection distance
         maxr: 80.0 # maximum detection distance
@@ -94,7 +94,7 @@
         type: radar.pc_extractor
         radar_resolution: 0.0596
         range_offset: -0.31
-        detector: kstrongest # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
+        detector: bfar # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
         minr: 2.0 # mininum detection distance
         maxr: 80.0 # maximum detection distance
         save_pointcloud_overlay: false
@@ -174,7 +174,7 @@
         voxel_downsample: false
         frame_voxel_size: 1.0 # grid size for frame voxelization in meters
 
-        window_size: 3.0 # number of neighboring azimuths used to compute line normal
+        window_size: 5.0 # number of neighboring azimuths used to compute line normal
         aximuth_res: 0.015707963267948967 # azimuth resolution in radians (0.1 in degree), giveng M=400
         rho_scale: 1.0 # when finding neighbors, set rho to log(rho) / rho_scale
 
@@ -233,7 +233,7 @@
         refined_max_iter: 25 # phase 2 max iterations
         refined_max_pairing_dist: 5.0 # phase 2 max pairing distance in meters
         refined_max_planar_dist: 5.0 # phase 2 max planar distance in meters
-        averaging_num_steps: 5 # averaging pose change over this number of steps until change is below a threshold at convergence
+        averaging_num_steps: 2 # averaging pose change over this number of steps until change is below a threshold at convergence
         huber_delta: 1.0 # huber loss threshold for ICP
         cauchy_k: 1.0
         w_icp_diag: [1.0, 1.0, 1.0]
@@ -243,7 +243,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.75
+        min_matched_ratio: 0.5
         max_trans_vel_diff: 2.60 # 1000.0 (or some large number) to disable
         max_rot_vel_diff: 1.35 # 1000.0 (or some large number) to disable
         max_transformation_diff: 1000.0 # 1000.0 (or some large number) to disable
@@ -304,7 +304,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.75
+        min_matched_ratio: 0.5
 
       memory:
         type: "graph_mem_manager"
