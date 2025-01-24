@@ -45,8 +45,8 @@ def main(args):
         lidar_vis = visualize_lidar_pointcloud(lidar.copy(), "red")
         
         # Load in mask file corresponding to localization
-        map_masked = cv2.imread(osp.join(args.mask_dir, train_loc_pairs[0][0], str(map_time) + '.png'))
-        loc_masked = cv2.imread(osp.join(args.mask_dir, train_loc_pairs[0][1], str(loc_time) + '.png'))
+        map_masked = cv2.imread(osp.join(args.mask_dir, train_loc_pairs[0][0], str(map_time) + ".png"))
+        loc_masked = cv2.imread(osp.join(args.mask_dir, train_loc_pairs[0][1], str(loc_time) + ".png"))
         # Convert mask array to only 0's and 1's, where 0's are masked out
         loc_masked = np.where(loc_masked > 0, 1, 0)
         map_masked = np.where(map_masked > 0, 1, 0)
