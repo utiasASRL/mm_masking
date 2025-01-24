@@ -170,9 +170,9 @@ class ICPWeightDataset():
 
                 if not (map_sensor == 'lidar' and loc_sensor == 'lidar'):
                     # Ensure radar image exists
-                    loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + '.png')
+                    loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + ".png")
                     #if network_input_type == 'cartesian':
-                    #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + '.png')
+                    #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + ".png")
                     #else:
                     
                     loc_radar_path = loc_radar_fft_path
@@ -185,7 +185,7 @@ class ICPWeightDataset():
                     cfar_dir = osp.join(data_dir, 'cfar', loc_seq, 'polar', str(a_thresh) + '_' + str(b_thresh))
                     if not osp.exists(cfar_dir):
                         os.makedirs(cfar_dir)
-                    loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + '.png')
+                    loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + ".png")
                     if not osp.exists(loc_cfar_path):
                         loc_radar_img = cv2.imread(loc_radar_fft_path, cv2.IMREAD_GRAYSCALE)
                         fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
@@ -454,7 +454,7 @@ class ICPWeightDataset():
     def get_item_from_loc_timestamp(self, loc_stamp_req):
         # Find the index of the loc_stamp
         # We know the path will contain the loc_stamp
-        loc_radar_path_to_find = str(loc_stamp_req) + '.png'
+        loc_radar_path_to_find = str(loc_stamp_req) + ".png"
         # Find loc_radar_path_to_find in self.loc_radar_path_list
         index = [i for i, s in enumerate(self.loc_radar_path_list) if loc_radar_path_to_find in s]
         assert index != [], 'loc_stamp_req not found in dataset'
