@@ -15,7 +15,7 @@
         # pipeline specific
         "lidar.pipeline",
         # "lidar.velodyne_converter",
-        "lidar.preprocessing",
+        # "lidar.preprocessing",
         # "lidar.odometry_icp",
         # "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",

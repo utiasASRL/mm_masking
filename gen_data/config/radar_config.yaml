@@ -3,24 +3,24 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: true
+    log_debug: false
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
-        "tactic",
-        "tactic.pipeline",
-        "tactic.module",
-        "tactic.module.live_mem_manager",
-        "tactic.module.graph_mem_manager",
+        # "tactic",
+        # "tactic.pipeline",
+        # "tactic.module",
+        # "tactic.module.live_mem_manager",
+        # "tactic.module.graph_mem_manager",
         # pipeline specific
         "radar.pipeline",
-        "radar.pc_extractor",
-         "radar.preprocessing",
+        # "radar.pc_extractor",
+        # "radar.preprocessing",
         # "radar.mcransac",
-        "radar.odometry_icp",
-        "radar.vertex_test",
-        "radar.localization_map_recall",
-        "radar.localization_icp",
+        # "radar.odometry_icp",
+        # "radar.vertex_test",
+        # "radar.localization_map_recall",
+        # "radar.localization_icp",
       ]
 
     ############ tactic configuration ############

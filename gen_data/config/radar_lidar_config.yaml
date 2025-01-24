@@ -19,8 +19,8 @@
         # "radar.mcransac",
         #"radar.odometry_icp",
         # "radar.vertex_test",
-        #"radar.localization_map_recall",
-        "radar_lidar.localization_icp",
+        # "radar.localization_map_recall",
+        # "radar_lidar.localization_icp",
       ]
 
     ############ tactic configuration ############
