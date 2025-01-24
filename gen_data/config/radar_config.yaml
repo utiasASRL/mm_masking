@@ -85,11 +85,7 @@
         type: radar.offline_converter
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
         radar_resolution: 0.0596 #0.0596, 0.0438
-        range_offset: -0.31
-        minr: 2.0 # mininum detection distance
-        maxr: 80.0 # maximum detection distance
-        beta: 0.049 # Doppler correction factor (set to 0 to turn this off)
-        # chirp_type:
+        cartesian_maxr: 80.0 # maximum cartesian visualization distance
       extraction:
         type: radar.pc_extractor
         radar_resolution: 0.0596
