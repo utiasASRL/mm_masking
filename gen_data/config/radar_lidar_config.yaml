@@ -263,8 +263,8 @@
       vertex_test:
         type: radar.vertex_test
 
-        max_translation: 10.0 # translation threshold in meters
-        max_rotation: 30.0 # rotation threshold in degrees
+        max_translation: 0.0 # translation threshold in meters
+        max_rotation: 0.0 # rotation threshold in degrees
 
       memory:
         type: "live_mem_manager"
