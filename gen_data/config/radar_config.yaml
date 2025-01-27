@@ -180,6 +180,7 @@
         visualize: false
 
     odometry:
+      start_frame: 0
       gyro:
         type: radar.odometry_gyro
         traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01]
@@ -242,7 +243,8 @@
         min_matched_ratio: 0.5
         max_trans_vel_diff: 2.60 # 1000.0 (or some large number) to disable
         max_rot_vel_diff: 1.35 # 1000.0 (or some large number) to disable
-        max_transformation_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_trans_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_rot_diff: 1000.0 # 1000.0 (or some large number) to disable
 
         visualize: false
 
