@@ -145,7 +145,7 @@ Consult the [Boreas download page](https://www.boreas.utias.utoronto.ca/#/downlo
 The training, validation, and testing code runs extracts data directly from the `vtr_results` result directories using the `vtr3_python` submodule. Every time that ICP is run in the T&R framework (any time a sensor measurement from a repeat sequence is localized against a submap constructed during the repeat sequence during a `run_test.sh localization` script execution), the raw and processed (motion corrected) pointclouds from the repeat sequence frame and the submap against which the pointcloud is localized against are saved. The raw pointcloud is simply the original BFAR-extracted pointcloud from the raw radar scan. To ensure that all data is saved, the following configuration parameters must be set in the `gen_data/config` directory for the repeat run:
 
 1. `save_raw_point_cloud` should be true
-2. `odometry/mapping/max_translation` and `odometry/mapping/max_rotation` should both be set to 0
+2. `odometry/vertex_test/max_translation` and `odometry/vertex_test/max_rotation` should both be set to 0
 
 For the purposes of the [Pointing the Way](https://arxiv.org/abs/2309.08731) paper, this only needs to be set in the `radar_lidar_config.yaml` file, as the `lidar_config.yaml` file is used for map generation only. 
 
