@@ -10,20 +10,19 @@ from pylgmath import Transformation
 def extract_points_from_vertex(v: Vertex, msg="raw_point_cloud", T_zero=False):
     raw_pc_msg = v.get_data(msg)
     new_pc = read_points(raw_pc_msg.point_cloud)
-    T_m_v = Transformation(xi_ab=np.array(raw_pc_msg.t_vertex_this.xi).reshape(6, 1))
+    T_v_m = Transformation(xi_ab=np.array(raw_pc_msg.t_vertex_this.xi).reshape(6, 1))
     
-    #T_v_m = Transformation(xi_ab=np.zeros((6, 1)))
     # Define normal transform which only has rotation component of T_v_m
     xi_ab_norm = np.zeros((6, 1))
     xi_ab_norm[3:] = np.array(raw_pc_msg.t_vertex_this.xi)[3:].reshape(3, 1)
-    T_m_v_norm = Transformation(xi_ab=xi_ab_norm)
+    T_v_m_norm = Transformation(xi_ab=xi_ab_norm)
 
     if T_zero:
-        T_m_v = Transformation(xi_ab=np.zeros((6, 1)))
-        T_m_v_norm = Transformation(xi_ab=np.zeros((6, 1)))
+        T_v_m = Transformation(xi_ab=np.zeros((6, 1)))
+        T_v_m_norm = Transformation(xi_ab=np.zeros((6, 1)))
 
-    points = convert_points_to_frame(np.vstack((new_pc['x'], new_pc['y'], new_pc['z'])), T_m_v).astype(np.float32)
-    normals = convert_points_to_frame(np.vstack((new_pc['normal_x'], new_pc['normal_y'], new_pc['normal_z'])), T_m_v_norm).astype(np.float32)
+    points = convert_points_to_frame(np.vstack((new_pc['x'], new_pc['y'], new_pc['z'])), T_v_m).astype(np.float32)
+    normals = convert_points_to_frame(np.vstack((new_pc['normal_x'], new_pc['normal_y'], new_pc['normal_z'])), T_v_m_norm).astype(np.float32)
     return points, normals
 
 def convert_points_to_frame(pts: np.ndarray, frame: Transformation):
@@ -45,7 +44,13 @@ def extract_points_and_map(graph: Graph, v: Vertex, msg_prefix='', extract_raw_p
     teach_v = g_utils.get_closest_teach_vertex(v)
     map_ptr = teach_v.get_data("pointmap_ptr")
     teach_v = graph.get_vertex(map_ptr.map_vid)
-    map_pts, maps_norms = extract_points_from_vertex(teach_v, msg="pointmap", T_zero=False)
+    pointmap = teach_v.get_data("pointmap")
+    submap_ptr = v.get_data("submap_loc")
+    
+    # teach_v = graph.get_vertex(map_ptr.map_vid)
+    #map_pts, maps_norms = extract_points_from_vertex(teach_v, msg="pointmap", T_zero=False) # This extracts the full, unfiltered lidar submap!
+
+    map_pts, maps_norms = extract_points_from_vertex(v, msg="submap_loc", T_zero=False)
 
     # Extract timestamps
     loc_stamp = int(v.stamp * 1e-3)

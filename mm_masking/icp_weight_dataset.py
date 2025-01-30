@@ -84,8 +84,8 @@ class ICPWeightDataset():
         
         self.v_id_vector = None
         self.graph_id_vector = None
-        self.T_loc_gt = None
-        self.T_loc_init = None
+        self.T_loc_map_gt = None
+        self.T_loc_map_init = None
         self.T_map_sensor_robot = []
         self.graph_list = []
         self.loc_radar_path_list = []
@@ -109,17 +109,21 @@ class ICPWeightDataset():
             
             v_start = pair_graph.get_vertex((1,0))
 
-            # Save transform from map sensor to robot
+            # Save transform from robot to map sensor
             # This is needed because the map pointcloud is saved in robot frame,
             # but ground truth is between map sensor and loc sensor.
             # This transform is constant for a given map sequence
-            yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+            T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                                    [-0.99955003, 0.0299955, 0., 0.0],
+                                    [ 0, 0, 1, 1.45],
+                                    [ 0, 0, 0, 1]])
+
             T_applanix_lidar = np.loadtxt(osp.join(dataset_dir, map_seq, 'calib', 'T_applanix_lidar.txt'))
             if map_sensor == 'radar':
                 T_radar_lidar = np.loadtxt(osp.join(dataset_dir, map_seq, 'calib', 'T_radar_lidar.txt'))
-                T_robot_map_sensor = yfwd2xfwd @ T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
+                T_robot_map_sensor = T_axel_applanix @ T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
             elif map_sensor == 'lidar':
-                T_robot_map_sensor = yfwd2xfwd @ T_applanix_lidar
+                T_robot_map_sensor = T_axel_applanix @ T_applanix_lidar
             T_map_sensor_robot = torch.from_numpy(get_inverse_tf(T_robot_map_sensor)).type(float_type)
             self.T_map_sensor_robot.append(T_map_sensor_robot)
 
@@ -170,13 +174,10 @@ class ICPWeightDataset():
 
                 if not (map_sensor == 'lidar' and loc_sensor == 'lidar'):
                     # Ensure radar image exists
-                    loc_radar_fft_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + ".png")
-                    #if network_input_type == 'cartesian':
-                    #    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', 'cart', str(loc_stamp) + ".png")
-                    #else:
+                    loc_radar_path = osp.join(dataset_dir, loc_seq, 'radar', str(loc_stamp) + ".png")
                     
-                    loc_radar_path = loc_radar_fft_path
                     if not osp.exists(loc_radar_path):
+                        print("Radar image does not exist at: ", loc_radar_path)
                         continue
 
                     # Ensure CFAR of image exists, if it does not, create one
@@ -187,7 +188,7 @@ class ICPWeightDataset():
                         os.makedirs(cfar_dir)
                     loc_cfar_path = osp.join(cfar_dir, str(loc_stamp) + ".png")
                     if not osp.exists(loc_cfar_path):
-                        loc_radar_img = cv2.imread(loc_radar_fft_path, cv2.IMREAD_GRAYSCALE)
+                        loc_radar_img = cv2.imread(loc_radar_path, cv2.IMREAD_GRAYSCALE)
                         fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
                         fft_data = torch.tensor(fft_data, dtype=self.float_type).unsqueeze(0)
                         azimuths = torch.tensor(azimuths, dtype=self.float_type).unsqueeze(0)
@@ -203,15 +204,17 @@ class ICPWeightDataset():
                     loc_cfar_path = 0
 
                 # Check that timestamps are matching to gt poses
-                assert loc_stamp == gt_loc_times[ii], "query: {}".format(loc_stamp)
+                assert loc_stamp == gt_loc_times[ii], "query: {}, gt stamp: {}".format(loc_stamp, gt_loc_times[ii])
                 closest_map_t = get_closest_index(map_stamp, gt_map_times)
                 assert map_stamp == gt_map_times[closest_map_t], "query: {}".format(map_stamp)
+
                 # Extract gt map pose
                 gt_map_pose_idx = gt_map_poses[closest_map_t]
-                gt_T_s2_s1 = get_inverse_tf(gt_loc_poses[ii]) @ gt_map_pose_idx
+                T_loc_map_gt = get_inverse_tf(gt_loc_poses[ii]) @ gt_map_pose_idx
 
                 # Save ground truth localization to map pose
-                T_gt_idx = torch.tensor(gt_T_s2_s1, dtype=float_type)
+                T_loc_map_gt = torch.tensor(T_loc_map_gt, dtype=float_type)
+                
                 # Now that we have ground truth, we can filter the map points to know max point size
                 # We only do filtering for lidar and only if we dont already have
                 # pointcloud metadata. This is done to speed up data loading
@@ -220,27 +223,24 @@ class ICPWeightDataset():
                         extract_raw_pts = False
                     else:
                         extract_raw_pts = True
+                    # Curr points are in the sensor frame they were collected in for repeat, map points are in robot frame
                     curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
                     assert curr_raw_pts.shape == curr_filt_pts.shape, 'Raw and filtered pointclouds dont match!'
 
-                    map_pts_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_pts.T + T_map_sensor_robot[:3, 3:4]).T
-                    map_norms_sensor_frame = (T_map_sensor_robot[:3,:3] @ map_norms.T).T
-                    map_pts, map_norms = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_gt_idx)
+                    map_pts_map_frame = (T_map_sensor_robot[:3,:3] @ map_pts.T + T_map_sensor_robot[:3, 3:4]).T
+                    map_norms_map_frame = (T_map_sensor_robot[:3,:3] @ map_norms.T).T
+                    map_pts, map_norms = self.filter_map(map_pts_map_frame, map_norms_map_frame, T_loc_map_gt, return_aligned=True)
                     
-
                     # Plot for visualization
-                    """
-                    print(ii)
-                    map_pts_loc_frame = (T_gt_idx[:3,:3] @ map_pts_sensor_frame[:,:3].T + T_gt_idx[:3, 3:4]).T
-                    plt.figure(figsize=(15,15))
-                    plt.scatter(map_pts_loc_frame[:,0], map_pts_loc_frame[:,1], s=1.0, c='red')
-                    plt.scatter(curr_filt_pts[:,0], curr_filt_pts[:,1], s=0.5, c='blue')
-                    plt.ylim([-80, 80])
-                    plt.xlim([-80, 80])
-                    plt.savefig('align.png')
-                    plt.close()
-                    time.sleep(1.0)
-                    """
+                    # print(ii)
+                    # plt.figure(figsize=(15,15))
+                    # plt.scatter(map_pts[:,0], map_pts[:,1], s=1.0, c='red')
+                    # plt.scatter(curr_filt_pts[:,0], curr_filt_pts[:,1], s=0.5, c='blue')
+                    # plt.ylim([-80, 80])
+                    # plt.xlim([-80, 80])
+                    # plt.savefig('align.png')
+                    # plt.close()
+                    # time.sleep(0.1)
 
                     if curr_raw_pts.shape[0] > local_max_loc_pts:
                         local_max_loc_pts = curr_raw_pts.shape[0]
@@ -253,9 +253,9 @@ class ICPWeightDataset():
                 # needs to "unlearn" to get to identity
                 if use_gt:
                     if gt_eye:
-                        T_init_idx = np.eye(4)
+                        T_loc_map_init = np.eye(4)
                     else:
-                        T_init_idx = gt_T_s2_s1
+                        T_loc_map_init = T_loc_map_gt.numpy()
                 else:
                     if dataset_type == 'train':
                         xi_rand = 2 * torch.rand((6,1), dtype=float_type) - 1
@@ -274,22 +274,22 @@ class ICPWeightDataset():
 
                     T_rand = Transformation(xi_ab=xi_rand)
                     if gt_eye:
-                        T_init_idx = T_rand.matrix() # @ identity
+                        T_loc_map_init = T_rand.matrix() # @ identity
                     else:
-                        T_init_idx = T_rand.matrix() @ gt_T_s2_s1
-                T_init_idx = torch.tensor(T_init_idx, dtype=float_type)
+                        T_loc_map_init = T_rand.matrix() @ T_loc_map_gt.numpy()
+                T_loc_map_init = torch.tensor(T_loc_map_init, dtype=float_type)
 
                 # Stack data for more efficient storage and retrieval
                 if self.v_id_vector is None:
                     self.v_id_vector = np.array([loc_v.id])
                     self.graph_id_vector = np.array([pair_idx])
-                    self.T_loc_gt = T_gt_idx.unsqueeze(0)
-                    self.T_loc_init = T_init_idx.unsqueeze(0)
+                    self.T_loc_map_gt = T_loc_map_gt.unsqueeze(0)
+                    self.T_loc_map_init = T_loc_map_init.unsqueeze(0)
                 else:
                     self.v_id_vector = np.append(self.v_id_vector, loc_v.id)
                     self.graph_id_vector = np.append(self.graph_id_vector, pair_idx)
-                    self.T_loc_gt = torch.cat((self.T_loc_gt, T_gt_idx.unsqueeze(0)), dim=0)
-                    self.T_loc_init = torch.cat((self.T_loc_init, T_init_idx.unsqueeze(0)), dim=0)
+                    self.T_loc_map_gt = torch.cat((self.T_loc_map_gt, T_loc_map_gt.unsqueeze(0)), dim=0)
+                    self.T_loc_map_init = torch.cat((self.T_loc_map_init, T_loc_map_init.unsqueeze(0)), dim=0)
 
                 self.loc_radar_path_list.append(loc_radar_path)
                 self.loc_cfar_path_list.append(loc_cfar_path)
@@ -314,21 +314,21 @@ class ICPWeightDataset():
                     self.max_map_pts = local_max_map_pts
 
         # Assert that the number of all elements are the same
-        assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_gt.shape[0] \
-            == self.T_loc_init.shape[0] == len(self.loc_radar_path_list) == len(self.loc_cfar_path_list)
+        assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_loc_map_gt.shape[0] \
+            == self.T_loc_map_init.shape[0] == len(self.loc_radar_path_list) == len(self.loc_cfar_path_list)
 
     def __len__(self):
         return self.v_id_vector.shape[0]
 
     def __getitem__(self, index):
         # Load in initial guess
-        T_init = self.T_loc_init[index]
+        T_init = self.T_loc_map_init[index]
 
         # Load in ground truth localization to map pose
-        T_ml_gt = self.T_loc_gt[index]
+        T_lm_gt = self.T_loc_map_gt[index]
 
         # Load in pointclouds and timestamps
-        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
+        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_lm_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
 
         if not (self.map_sensor == 'lidar' and self.loc_sensor == 'lidar'):
@@ -357,11 +357,11 @@ class ICPWeightDataset():
         loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
                     'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
         map_data = {'pc': map_pc, 'timestamp' : map_stamp}
-        T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
+        T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_lm_gt.inverse()}
 
         return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data}
     
-    def load_graph_data(self, idx, T_ml_gt):
+    def load_graph_data(self, idx, T_lm_gt):
         v_id = self.v_id_vector[idx].item() # Need .item() as v_id must be int, not np.int32/64
         graph_id = self.graph_id_vector[idx]
         pair_graph = self.graph_list[graph_id]
@@ -372,7 +372,7 @@ class ICPWeightDataset():
             extract_raw_pts = True
         
         curr_raw_pts, curr_filt_pts, map_pts, map_norms, loc_stamp, map_stamp = extract_points_and_map(pair_graph, vertex, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
-        
+
         # Make scan_pc batchable
         curr_raw_pts = torch.from_numpy(curr_raw_pts)
         curr_filt_pts = torch.from_numpy(curr_filt_pts)
@@ -389,7 +389,10 @@ class ICPWeightDataset():
 
         # Next, filter the map points based on field of view and z-normal value
         # We only do filtering for lidar
-        map_pts_sensor_frame, map_norms_sensor_frame = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_ml_gt, return_aligned=self.gt_eye)
+        map_pts_sensor_frame, map_norms_sensor_frame = self.filter_map(map_pts_sensor_frame, map_norms_sensor_frame, T_lm_gt, return_aligned=self.gt_eye)
+
+        print("Original size of map: ", map_pts[map_pts[:,0] != 1000.0].shape[0])
+        print("Filtered size of map: ", map_pts_sensor_frame[map_pts_sensor_frame[:,0] != 1000.0].shape[0])
 
         # Make map_pc batchable
         map_pc_pad = self.target_pad_val*torch.ones((self.max_map_pts - map_pts_sensor_frame.shape[0], 3), dtype=self.float_type)
@@ -399,28 +402,35 @@ class ICPWeightDataset():
 
         return scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp
 
-    def filter_map(self, map_pts, map_norms, T_ml_gt, return_aligned=False):
+    def filter_map(self, map_pts_map_frame, map_norms_map_frame, T_lm_gt, return_aligned=False):
         # Transform map points to loc frame using gt to filter
-        map_pts_loc_frame = (T_ml_gt[:3,:3] @ map_pts.T + T_ml_gt[:3, 3:4]).T
-        map_norms_loc_frame = (T_ml_gt[:3,:3] @ map_norms.T).T
+        map_pts_loc_frame = (T_lm_gt[:3,:3] @ map_pts_map_frame.T + T_lm_gt[:3, 3:4]).T
+        map_norms_loc_frame = (T_lm_gt[:3,:3] @ map_norms_map_frame.T).T
 
-        # Filter by elevation and z-normal score
-        # TODO: Make these parameters
-        elevation_threshold = 0.05
-        z_normal_threshold = 0.9
-        p_in_s = map_pts_loc_frame
-        elev = torch.abs(torch.atan2(p_in_s[:,2], torch.sqrt(p_in_s[:,0] * p_in_s[:,0] + p_in_s[:,1] * p_in_s[:,1])))
-        z_norm = torch.abs(map_norms_loc_frame[:,2])
-        if self.loc_sensor == 'radar' and self.map_sensor == 'lidar':
-            valid_pts = (elev <= elevation_threshold) & (z_norm <= z_normal_threshold)
-        else:
-            valid_pts = torch.ones((map_pts_loc_frame.shape[0],), dtype=torch.bool)
+        # for ii in range(map_pts_loc_frame.shape[0]):
+        #     print("point in loc frame: ", map_pts_loc_frame[ii], " normal in loc frame: ", map_norms_loc_frame[ii])
+
+        # NOW SAVING FILTERED POINTCLOUDS FROM VTR, NO NEED TO DO IT HERE!
+
+        # # Filter by elevation and z-normal score
+        # # TODO: Make these parameters
+        # elevation_threshold = 0.05
+        # z_normal_threshold = 0.9
+        # p_in_s = map_pts_loc_frame
+        # elev = torch.abs(torch.atan2(p_in_s[:,2], torch.sqrt(p_in_s[:,0] * p_in_s[:,0] + p_in_s[:,1] * p_in_s[:,1])))
+        # z_norm = torch.abs(map_norms_loc_frame[:,2])
+        # if self.loc_sensor == 'radar' and self.map_sensor == 'lidar':
+        #     valid_pts = (elev <= elevation_threshold) & (z_norm <= z_normal_threshold)
+        # else:
+        #     valid_pts = torch.ones((map_pts_loc_frame.shape[0],), dtype=torch.bool)
+
+        valid_pts = torch.ones((map_pts_loc_frame.shape[0],), dtype=torch.bool)
         
         # Extract only valid points
         if return_aligned:
             return map_pts_loc_frame[valid_pts], map_norms_loc_frame[valid_pts]
         else:
-            return map_pts[valid_pts], map_norms[valid_pts]
+            return map_pts_map_frame[valid_pts], map_norms_map_frame[valid_pts]
     
     def augment_data(self, scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar):
         if not self.gt_eye:
@@ -459,16 +469,19 @@ class ICPWeightDataset():
         index = [i for i, s in enumerate(self.loc_radar_path_list) if loc_radar_path_to_find in s]
         assert index != [], 'loc_stamp_req not found in dataset'
         index = index[0]
+        
         # Load in initial guess
-        T_init = self.T_loc_init[index]
+        T_lm_init = self.T_loc_map_init[index]
 
         # Load in ground truth localization to map pose
-        T_ml_gt = self.T_loc_gt[index]
+        T_lm_gt = self.T_loc_map_gt[index]
 
         # Load in pointclouds and timestamps
-        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_ml_gt)
+        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index, T_lm_gt)
         assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
         assert loc_stamp_req == loc_stamp, 'loc_stamp_req does not match loc_stamp'
+
+        print("Map pc shape: ", map_pc.shape)
 
         loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
         fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
@@ -491,6 +504,6 @@ class ICPWeightDataset():
         loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
                     'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
         map_data = {'pc': map_pc, 'timestamp' : map_stamp}
-        T_data = {'T_ml_init' : T_init, 'T_ml_gt' : T_ml_gt}
+        T_data = {'T_ml_init' : T_lm_init.inverse(), 'T_ml_gt' : T_lm_gt.inverse()}
 
-        return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data}
+        return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data, 'index': index}
