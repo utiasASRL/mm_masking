@@ -43,7 +43,7 @@
       save_odometry_result: true
       save_odometry_vel_result : true
       save_localization_result: true
-      visualize: false
+      visualize: true
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -160,7 +160,7 @@
           zq: 2.75
           sigma: 10
 
-        visualize: false
+        visualize: true
 
       filtering:
         type: radar.preprocessing
@@ -177,10 +177,11 @@
         num_sample_linearity: 5000 # max number of sample after filtering based on linearity
         min_linearity_score: -1.0 # min linearity score (negative value means no filtering)
 
-        visualize: false
+        visualize: true
 
     odometry:
       start_frame: 0
+      end_frame: -1 # -1 means process all frames
       gyro:
         type: radar.odometry_gyro
         traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01]
@@ -207,7 +208,7 @@
         # BASD
         nbins: 16
         bin_size: 1
-        visualize: false
+        visualize: true
         filter_pc: false
         init_icp: false
 
@@ -246,7 +247,7 @@
         max_trans_diff: 1000.0 # 1000.0 (or some large number) to disable
         max_rot_diff: 1000.0 # 1000.0 (or some large number) to disable
 
-        visualize: false
+        visualize: true
 
       mapping:
         type: radar.odometry_map_maintenance
@@ -258,7 +259,7 @@
 
         point_life_time: 3.0 # point life time based on number of map updates
 
-        visualize: false
+        visualize: true
 
       vertex_test:
         type: radar.vertex_test
@@ -272,12 +273,14 @@
         window_size: 5 # unload data older than this many keyframes
 
     localization:
+      start_frame: 0  # Not implemented yet
+      end_frame: -1 # -1 means process all frames
       recall:
         type: radar.localization_map_recall
 
         map_version: "pointmap"
 
-        visualize: false
+        visualize: true
 
       icp:
         type: radar.localization_icp

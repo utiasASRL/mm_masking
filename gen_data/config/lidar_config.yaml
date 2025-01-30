@@ -43,7 +43,7 @@
       save_odometry_result: true
       save_odometry_vel_result : true
       save_localization_result: true
-      visualize: false
+      visualize: true
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -87,14 +87,14 @@
         fov_center: 45.0
         fov: 60.0
 
-        visualize: false
+        visualize: true
 
       filtering:
         type: lidar.preprocessing
 
         num_threads: 1
 
-        crop_range: 60.0
+        crop_range: 80.0
 
         frame_voxel_size: 0.3 # grid subsampling voxel size
 
@@ -113,10 +113,11 @@
 
         cluster_num_sample: 10000 # maxnumber of sample after removing isolated points
 
-        visualize: false
+        visualize: true
 
     odometry:
       start_frame: 0
+      end_frame: -1 # -1 means process all frames
       icp:
         type: lidar.odometry_icp
 
@@ -157,19 +158,19 @@
         max_trans_diff: 1000.0 # 1000.0 (or some large number) to disable
         max_rot_diff: 1000.0 # 1000.0 (or some large number) to disable
 
-        visualize: false
+        visualize: true
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
 
         map_voxel_size: 0.3
 
-        crop_range_front: 60.0
+        crop_range_front: 100.0
         back_over_front_ratio: 1.0
 
         point_life_time: 10.0
 
-        visualize: false
+        visualize: true
 
       vertex_test:
         type: lidar.vertex_test
@@ -183,12 +184,14 @@
         window_size: 5 # unload data older than this many keyframes
 
     localization:
+      start_frame: 0  # Not implemented yet
+      end_frame: -1 # -1 means process all frames
       recall:
         type: lidar.localization_map_recall
 
         map_version: "pointmap"
 
-        visualize: false
+        visualize: true
 
       icp:
         type: lidar.localization_icp
