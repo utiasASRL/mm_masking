@@ -285,7 +285,7 @@
       icp:
         type: radar_lidar.localization_icp
 
-        use_pose_prior: false
+        use_pose_prior: true
 
         # lidar map projection parameters
         elevation_threshold: 0.05 # elevation threshold in meters
@@ -293,16 +293,16 @@
 
         # ICP parameters
         num_threads: 1
-        first_num_steps: 0
-        initial_max_iter: 0
+        first_num_steps: 2
+        initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 1
-        refined_max_pairing_dist: 500.0
-        refined_max_planar_dist: 500.0  # not used currently
+        refined_max_iter: 50
+        refined_max_pairing_dist: 5.0
+        refined_max_planar_dist: 5.0  # not used currently
         averaging_num_steps: 5
         huber_delta: 1.0  # not used currently
-        cauchy_k: 100.0
+        cauchy_k: 1.0
 
         # steam parameters
         verbose: false
