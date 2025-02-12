@@ -81,8 +81,8 @@ def extract_checkpoints(run, checkpoint_dir):
 def main():
     print("Starting mask gen script!", flush=True)
 
-    run_id = "MMICP-632"
-    best_epoch = 35
+    run_id = "MMICP-631"
+    best_epoch = 40
     run = neptune.init_run(with_id=run_id,
                             api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4ODZkYzJmNS1iMWY3LTRlMWYtYWNjYy0zNTFhOWJjYjNiMTQifQ==",
                             project='asrl/mm-icp',
@@ -95,7 +95,6 @@ def main():
     if not osp.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
     
-    print("hello")
     extract_checkpoints(run, checkpoint_dir)
 
     best_policy_path = osp.join(checkpoint_dir, f'epoch_{best_epoch}.pt')
@@ -188,7 +187,7 @@ def main():
     policy = policy.to(device=params["device"])
     print("Policy created")
 
-    policy.load_state_dict(torch.load(best_policy_path))
+    policy.load_state_dict(torch.load(best_policy_path, weights_only=True))
     policy.eval()
 
     rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
