@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from pylgmath import se3op, Transformation
-from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff, extract_bev_from_pts, point_to_cart_idx
+from radar_utils import load_radar, cfar_mask, extract_pc, load_pc_from_file, radar_cartesian_to_polar, radar_polar_to_cartesian_diff, extract_bev_from_pts
 from dICP.ICP import ICP
 from pyboreas.utils.utils import (
     SE3Tose3,
@@ -60,6 +60,8 @@ class ICPWeightDataset():
         b_thresh=params["b_thresh"]
         network_input_type = params["network_input_type"]
 
+        self.load_from_pc = True
+
         self.loc_pairs = loc_pairs
         self.float_type = float_type
         self.map_sensor = map_sensor
@@ -92,6 +94,7 @@ class ICPWeightDataset():
         data_dir = '../data'
         dataset_dir = osp.join(data_dir, 'vtr_data')
         vtr_result_dir = osp.join(data_dir, 'vtr_results')
+        vtr_raw_result_dir = osp.join(data_dir, 'vtr_results_raw')
         self.polar_res = 0.0596
         
         self.v_id_vector = None
@@ -146,12 +149,25 @@ class ICPWeightDataset():
                 df = pd.DataFrame(df_data, index=[0])
                 df.to_csv(metadata_path, index=False)
 
+            # Form directories for direct pointclouds
+            if self.load_from_pc:
+                map_pc_path = osp.join(vtr_raw_result_dir, sensor_dir_name, map_seq, 'map_pc')
+                if not osp.exists(map_pc_path):
+                    os.makedirs(map_pc_path)
+                loc_path = osp.join(vtr_raw_result_dir, sensor_dir_name, map_seq, loc_seq)
+                if not osp.exists(loc_path):
+                    os.makedirs(loc_path)
+                    os.makedirs(osp.join(loc_path, 'raw_pts'))
+                    os.makedirs(osp.join(loc_path, 'filt_pts'))
+                gt_transform_path = osp.join(loc_path, 'groundtruth.csv')
+
             # Load in the metadata file to see if we need to extract max points during
             # data loading. 
             pair_df = pd.read_csv(metadata_path)
             # If we have sufficient metadata about what we wish to extract,
             # don't bother extracting more
             extract_pcs_metadata = True
+            save_gt_path = False
             if (pair_df['complete'][0] == 1 or (pair_df['up_to_idx'][0] >= num_samples and num_samples>0)):
                 extract_pcs_metadata = False
                 # Check if new max is reached
@@ -159,6 +175,19 @@ class ICPWeightDataset():
                     self.max_loc_pts = pair_df['max_loc'][0]
                 if pair_df['max_map'][0] > self.max_map_pts:
                     self.max_map_pts = pair_df['max_map'][0]
+                
+                if self.load_from_pc:
+                    if not osp.exists(gt_transform_path):
+                        save_gt_path = True
+                    else:
+                        save_gt_path = False
+            else:
+                if self.load_from_pc:
+                    # Delete gt_transform_path file
+                    if osp.exists(gt_transform_path):
+                        os.remove(gt_transform_path)
+                    save_gt_path = True
+
             print("Loading from metadata: " + str(not extract_pcs_metadata))
             local_max_loc_pts = 0
             local_max_map_pts = 0
@@ -210,7 +239,7 @@ class ICPWeightDataset():
                         # Save CFAR image
                         #if network_input_type == 'cartesian':
                         #    fft_cfar = radar_polar_to_cartesian_diff(fft_cfar, azimuths, self.polar_res)
-                        cv2.imwrite(loc_cfar_path, 255*fft_cfar.squeeze(0).numpy())
+                        cv2.imwrite(loc_cfar_path, (255*fft_cfar.squeeze(0).numpy()).astype(np.uint8))
                 else:
                     loc_radar_path = 0
                     loc_cfar_path = 0
@@ -239,6 +268,16 @@ class ICPWeightDataset():
                     raw_ls, filt_ls, submap_map, T_r_map, _, _ = extract_points_and_map(pair_graph, loc_v, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
                     assert filt_ls.shape == raw_ls.shape, 'Raw and filtered pointclouds dont match!'
                     
+                    # Save loc pointcloud to loc_path
+                    if self.load_from_pc:
+                        loc_pc_raw_path = osp.join(loc_path, 'raw_pts', str(loc_stamp) + '.bin')
+                        raw_ls.tofile(loc_pc_raw_path)
+                        loc_pc_filt_path = osp.join(loc_path, 'filt_pts', str(loc_stamp) + '.bin')
+                        filt_ls.tofile(loc_pc_filt_path)
+                        map_pc_path_idx = osp.join(map_pc_path, str(loc_stamp) + '.bin')
+                        if not osp.exists(map_pc_path_idx):
+                            submap_map.tofile(map_pc_path_idx)
+
                     # Update max point sizes for metadata
                     if raw_ls.shape[0] > local_max_loc_pts:
                         local_max_loc_pts = raw_ls.shape[0]
@@ -315,6 +354,21 @@ class ICPWeightDataset():
                 if (ii % 100) == 0:
                     print(str(ii) + " data samples processed")
 
+                # Save map timestamp, loc timestamp, and gt transform to file
+                if self.load_from_pc and save_gt_path:
+                    T_map_ls_gt = T_map_ls_gt.numpy()
+                    df_data = {'map_stamp' : map_stamp, 'loc_stamp': loc_stamp, 
+                               'T_map_ls_0_0': T_map_ls_gt[0,0], 'T_map_ls_0_1': T_map_ls_gt[0,1], 'T_map_ls_0_2': T_map_ls_gt[0,2], 'T_map_ls_0_3': T_map_ls_gt[0,3],
+                               'T_map_ls_1_0': T_map_ls_gt[1,0], 'T_map_ls_1_1': T_map_ls_gt[1,1], 'T_map_ls_1_2': T_map_ls_gt[1,2], 'T_map_ls_1_3': T_map_ls_gt[1,3],
+                               'T_map_ls_2_0': T_map_ls_gt[2,0], 'T_map_ls_2_1': T_map_ls_gt[2,1], 'T_map_ls_2_2': T_map_ls_gt[2,2], 'T_map_ls_2_3': T_map_ls_gt[2,3],
+                               'T_map_ls_3_0': T_map_ls_gt[3,0], 'T_map_ls_3_1': T_map_ls_gt[3,1], 'T_map_ls_3_2': T_map_ls_gt[3,2], 'T_map_ls_3_3': T_map_ls_gt[3,3]}
+                    df = pd.DataFrame(df_data, index=[0])
+                    if not osp.exists(gt_transform_path):
+                        df.to_csv(gt_transform_path, index=False)
+                    else:
+                        df.to_csv(gt_transform_path, mode='a', header=False, index=False)
+
+
                 if num_samples > 0 and self.v_id_vector.shape[0] >= num_samples:
                     break
             
@@ -325,12 +379,16 @@ class ICPWeightDataset():
                 df_data = {'complete' : meta_complete, 'up_to_idx': ii, 'max_loc': local_max_loc_pts, 'max_map': local_max_map_pts}
                 df = pd.DataFrame(df_data, index=[0])
                 df.to_csv(metadata_path, index=False)
+
+                if self.load_from_pc:
+                    metadata_raw_path = osp.join(vtr_raw_result_dir, sensor_dir_name, map_seq, loc_seq, 'metadata.csv')
+                    df.to_csv(metadata_raw_path, index=False)
                 
                 # Overwrite max point sizes if they are larger
                 if local_max_loc_pts > self.max_loc_pts:
                     self.max_loc_pts = local_max_loc_pts
                 if local_max_map_pts > self.max_map_pts:
-                    self.max_map_pts = local_max_map_pts
+                    self.max_map_pts = local_max_map_pts        
 
         # Assert that the number of all elements are the same
         assert self.v_id_vector.shape[0] == self.graph_id_vector.shape[0] == self.T_map_ls_gt.shape[0] \
@@ -391,7 +449,6 @@ class ICPWeightDataset():
             extract_raw_pts = True
         
         raw_ls, filt_ls, submap_map, _, loc_stamp, map_stamp = extract_points_and_map(pair_graph, vertex, msg_prefix=self.msg_prefix, extract_raw_pts=extract_raw_pts)
-        print(raw_ls[0])
         
         # Make scan_pc batchable
         raw_ls = torch.from_numpy(raw_ls[:,:3])
@@ -405,7 +462,8 @@ class ICPWeightDataset():
 
         if (self.gt_eye):
             T_ls_map_gt = torch.tensor(get_inverse_tf(self.T_map_ls_gt[idx].numpy()), dtype=self.float_type)
-            submap_map = (T_ls_map_gt[:3,:3] @ submap_map[:,:3].T + T_ls_map_gt[:3, 3:4]).T
+            submap_map[:,:3] = (T_ls_map_gt[:3,:3] @ submap_map[:,:3].T + T_ls_map_gt[:3, 3:4]).T
+            submap_map[:,3:6] = (T_ls_map_gt[:3,:3] @ submap_map[:,3:6].T).T
 
         # Make map_pc batchable
         map_pc_pad = self.target_pad_val*torch.ones((self.max_map_pts - submap_map.shape[0], submap_map.shape[1]), dtype=self.float_type)
@@ -450,41 +508,8 @@ class ICPWeightDataset():
         index = [i for i, s in enumerate(self.loc_radar_path_list) if loc_radar_path_to_find in s]
         assert index != [], 'loc_stamp_req not found in dataset'
         index = index[0]
-        
-        # Load in initial guess
-        T_map_ls_init = self.T_map_ls_init[index]
 
-        # Load in ground truth localization to map pose
-        T_map_ls_gt = self.T_map_ls_gt[index]
+        get_item_res = self.__getitem__(index)
+        get_item_res['index'] = index
 
-        # Load in pointclouds and timestamps
-        scan_pc_raw, scan_pc_filt, map_pc, loc_stamp, map_stamp = self.load_graph_data(index)
-        assert scan_pc_raw.shape == scan_pc_filt.shape, 'Raw and filtered pointclouds dont match!'
-        assert loc_stamp_req == loc_stamp, 'loc_stamp_req does not match loc_stamp'
-
-        print("Map pc shape: ", map_pc.shape)
-
-        loc_radar_img = cv2.imread(self.loc_radar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        fft_data, azimuths, az_timestamps = load_radar(loc_radar_img)
-        fft_data = torch.tensor(fft_data, dtype=self.float_type)
-        azimuths = torch.tensor(azimuths, dtype=self.float_type)
-        az_timestamps = torch.tensor(az_timestamps, dtype=self.float_type)
-
-        fft_cfar = cv2.imread(self.loc_cfar_path_list[index], cv2.IMREAD_GRAYSCALE)
-        fft_cfar = torch.tensor(fft_cfar, dtype=self.float_type)/255.0
-
-        # Deal with data augmentation
-        if self.augment:
-            scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar = \
-                self.augment_data(scan_pc_raw, scan_pc_filt, map_pc, azimuths, fft_data, fft_cfar)
-
-        if self.network_input_type == 'cartesian':
-            fft_data = radar_polar_to_cartesian_diff(fft_data.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
-            fft_cfar = radar_polar_to_cartesian_diff(fft_cfar.unsqueeze(0), azimuths.unsqueeze(0), self.polar_res).squeeze(0)
-
-        loc_data = {'raw_pc': scan_pc_raw, 'filtered_pc': scan_pc_filt,
-                    'fft_data' : fft_data, 'fft_cfar' : fft_cfar, 'timestamp' : loc_stamp}
-        map_data = {'pc': map_pc, 'timestamp' : map_stamp}
-        T_data = {'T_ml_init' : T_map_ls_init, 'T_ml_gt' : T_map_ls_gt}
-
-        return {'loc_data': loc_data, 'map_data': map_data, 'transforms': T_data, 'index': index}
+        return get_item_res

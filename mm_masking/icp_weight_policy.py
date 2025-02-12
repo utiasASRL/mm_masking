@@ -44,6 +44,8 @@ class LearnICPWeightPolicy(nn.Module):
         b_threshold=params["b_thresh"]
         gt_eye=params["gt_eye"]
         max_iter=params["max_iter"]
+        max_iter_inf=params["max_iter_inference"]
+        icp_dim=params["icp_dim"]
 
         if params["loss_icp_rot_weight"] > 0.0 and params["loss_icp_trans_weight"] > 0.0:
             self.use_ICP_4_train = True
@@ -51,11 +53,13 @@ class LearnICPWeightPolicy(nn.Module):
             self.use_ICP_4_train = False
 
         config_path = '../external/dICP/config/dICP_config.yaml'
-        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-5)
-        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=50, tolerance=1e-5)
+        self.ICP_alg = ICP(icp_type=icp_type, config_path=config_path, differentiable=True, max_iterations=max_iter, tolerance=1e-4)
+        self.ICP_alg.nn.use_gumbel = params["use_gumbel"]
+        self.ICP_alg_inference = ICP(icp_type=icp_type, config_path=config_path, differentiable=False, max_iterations=max_iter_inf, tolerance=1e-4)
         self.float_type = float_type
         self.device = device
         self.network_inputs = network_inputs
+        self.icp_dim = icp_dim
         if network_input_type == 'cartesian':
             self.range_mask, _ = form_cart_range_angle_grid(device=device)
         elif network_input_type == 'polar':
@@ -124,15 +128,17 @@ class LearnICPWeightPolicy(nn.Module):
 
         return nn.Sequential(*modules)
 
-    def forward(self, batch_scan, batch_map, T_init, binary=False, override_mask=None, neptune_run=None, epoch=0, batch_idx=0, mask_only=False):
+    def forward(self, batch_scan, batch_map, T_init, binary=False, low_cap_weight=0.0, override_mask=None, neptune_run=None, epoch=0, batch_idx=0, mask_only=False):
         # If override_mask is not None, then don't use network to get mask, just use override_mask
         # Extract points
         fft_data = batch_scan['fft_data'].to(self.device)#.requires_grad_(True)
         fft_cfar = batch_scan['fft_cfar'].to(self.device)
         scan_pc_raw = batch_scan['raw_pc'].to(self.device)
-        #map_pc_paths = batch_map['pc_path']
         map_pc = batch_map['pc'].to(self.device)
 
+        # Form weight fft "scan", where each non-zero pixel is the weight for the 
+        # corresponding pointcloud point at the same pixel
+        fft_weights = torch.where(fft_cfar > 0.0, 1.0, 0.0)
         if override_mask is None:
             input_data = None
             # Convert input data to desired network input
@@ -198,10 +204,12 @@ class LearnICPWeightPolicy(nn.Module):
         if mask_only:
             return weight_mask
 
+        if not self.training and low_cap_weight > 0.0:
+            weight_mask[weight_mask < low_cap_weight] = low_cap_weight
+
         # Extract weights correcponding to scan_pc
-        # Check if weight mask is as 1's, then dont need to extract
         weights, diff_mean_num_non0, mean_num_non0, mean_w, max_w, min_w = extract_weights(weight_mask, scan_pc_raw)
-        
+
         # Save params
         self.mean_num_pts = mean_num_non0
         self.max_w = max_w
@@ -213,7 +221,7 @@ class LearnICPWeightPolicy(nn.Module):
         non0_pts = non0_x * non0_y
         self.mean_all_pts = torch.sum(non0_pts) / scan_pc_raw.shape[0]
 
-        del fft_data, fft_cfar
+        del fft_data, fft_cfar, fft_weights
         torch.cuda.empty_cache()
 
         scan_pc_filt = batch_scan['filtered_pc'].to(self.device)
@@ -238,18 +246,50 @@ class LearnICPWeightPolicy(nn.Module):
                 scan_w_0 = scan_w_0 / np.max(scan_w_0)
             scan_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) > 0.05]
 
+            max_map_val = np.max(np.abs(map_pc_0))
+
+            scan_cropped_pc_0 = scan_pc_0[np.abs(scan_pc_0[:,0]) < max_map_val]
+            scan_w_cropped_0 = scan_w_0[np.abs(scan_pc_0[:,0]) < max_map_val]
+            scan_w_cropped_0 = scan_w_cropped_0[np.abs(scan_cropped_pc_0[:,1]) < max_map_val]
+            scan_cropped_pc_0 = scan_cropped_pc_0[np.abs(scan_cropped_pc_0[:,1]) < max_map_val]
+
+            # Plot the pointclouds
+            if neptune_run == 'local':
+                fig = plt.figure()
+                #plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=1.0, c='r')
+                plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=10.0, c='midnightblue')
+                plt.axis('off')
+                plt.savefig('extracted_full_pc.png', bbox_inches="tight", pad_inches=0)
+
+                fig = plt.figure()
+                #plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=1.0, c='r')
+                plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=10.0, c='midnightblue', alpha=scan_w_0)
+                plt.axis('off')
+                plt.savefig('extracted_weighted_pc.png', bbox_inches="tight", pad_inches=0)
+
+                fig = plt.figure()
+                plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=10.0, c='firebrick')
+                plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='royalblue', alpha=0.0*scan_w_0)
+                plt.axis('off')
+                plt.savefig('map_pc.png', bbox_inches="tight", pad_inches=0)
+
+
             # Also isolate the points for which weight is above 0.01
             scan_pc_0_used = scan_pc_0[scan_w_0 > 0.01]
             scan_w_0_used = scan_w_0[scan_w_0 > 0.01]
             scan_pc_0_w0 = scan_pc_0[scan_w_0 <= 0.01]
             scan_w_0_w0 = scan_w_0[scan_w_0 <= 0.01]
 
+
             fig = plt.figure()
             plt.scatter(map_pc_0[:, 0], map_pc_0[:, 1], s=1.0, c='r')
             plt.scatter(scan_pc_0[:, 0], scan_pc_0[:, 1], s=0.5, c='b', alpha=scan_w_0)
             plt.legend(['map', 'scan'])
             plt.title("Pointclouds")
-            neptune_run["extracted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
+            if neptune_run == 'local':
+                plt.savefig('extracted_pc.png')
+            else:
+                neptune_run["extracted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
             plt.close(fig)
 
             fig, ax = plt.subplots()
@@ -260,7 +300,10 @@ class LearnICPWeightPolicy(nn.Module):
             plt.xlabel('x (m)')
             plt.ylabel('y (m)')
             plt.title("Weighted Scan")
-            neptune_run["weighted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
+            if neptune_run == 'local':
+                plt.savefig('weighted_pc.png')
+            else:
+                neptune_run["weighted_pc"].append(fig, name=("epoch " + str(epoch) + ",batch " + str(batch_idx)))
             plt.close(fig)
 
         # Pass the modified fft_data through ICP
@@ -268,11 +311,11 @@ class LearnICPWeightPolicy(nn.Module):
         
         # If we are training and don't want to use ICP, return initial guess
         if self.training and not self.use_ICP_4_train:
-            return T_init, weight_mask, diff_mean_num_non0
+            delta_norms = torch.zeros(T_init.shape[0], dtype=torch.bool)
+            return T_init, weight_mask, diff_mean_num_non0, delta_norms
+        T_est, delta_norms = self.icp(scan_pc_filt, map_pc, T_init, weights)
 
-        T_est = self.icp(scan_pc_filt, map_pc, T_init, weights)
-
-        return T_est, weight_mask, diff_mean_num_non0
+        return T_est, weight_mask, diff_mean_num_non0, delta_norms
     
     def icp(self, scan_pc, map_pc, T_init, weights):
         loss_fn = {"name": "cauchy", "metric": 1.0}
@@ -280,9 +323,11 @@ class LearnICPWeightPolicy(nn.Module):
         if self.training:
             icp_result = self.ICP_alg.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
-                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
+                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=self.icp_dim)
         else:
             icp_result = self.ICP_alg_inference.icp(scan_pc, map_pc, 
                                     T_init=T_init, weight=weights,
-                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=2)
-        return icp_result['T']
+                                    trim_dist=trim_dist, loss_fn=loss_fn, dim=self.icp_dim)
+        delta_norms = torch.norm(icp_result['deltas'][:,-1], dim=1).squeeze(1)
+        print(icp_result['stats'])
+        return icp_result['T'], delta_norms
