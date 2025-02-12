@@ -3,7 +3,7 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: false
+    log_debug: true
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
@@ -20,7 +20,7 @@
         # "radar.odometry_icp",
         # "radar.vertex_test",
         # "radar.localization_map_recall",
-        # "radar_lidar.localization_icp",
+        "radar_lidar.localization_icp",
         "radar_lidar.pipeline"
       ]
 
@@ -297,12 +297,17 @@
         initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 50
+        refined_max_iter: 25
         refined_max_pairing_dist: 5.0
         refined_max_planar_dist: 5.0  # not used currently
         averaging_num_steps: 5
         huber_delta: 1.0  # not used currently
         cauchy_k: 1.0
+
+        # Masking
+        use_mask: false
+        mask_dir: '/home/dli/proj_repos/mm_masking/data/masks'
+        mask_id: 'MMICP-630'
 
         # steam parameters
         verbose: false
