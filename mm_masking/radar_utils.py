@@ -7,15 +7,19 @@ import torch.nn.functional as F
 import cv2
 import time
 
-def load_pc_from_file(file_path, to_type=None, to_device='cpu'):
+def load_pc_from_file(file_path, to_type=None, to_device='cpu', normals=True):
     pc = np.fromfile(file_path, dtype=np.float32)
-    pc = pc.reshape((len(pc) // 6, 6))
+    if normals:
+        pc = pc.reshape((len(pc) // 6, 6))
+    else:
+        pc = pc.reshape((len(pc) // 3, 3))
     # Send to device
     pc = torch.from_numpy(pc).to(to_device)
     # Convert to type
     if to_type is not None:
         pc = pc.type(to_type)
     return pc
+
 
 def load_radar(raw_img):
     raw_data = np.asarray(raw_img)
@@ -436,3 +440,25 @@ def form_polar_range_grid(polar_resolution=0.2384, polar_pixel_shape=(400, 3360)
     range_grid = range_coords.unsqueeze(0).expand(polar_pixel_shape[0], -1)
 
     return range_grid
+
+def visualize_pointcloud_over_img(cart_img, pc, start_fig=True):
+    # Need to align the cartesian image with pointcloud xy coordinates
+    cart_img = np.rot90(cart_img, k=1, axes=(0,1))
+    cart_img = np.flip(cart_img, axis=0)
+
+    # Get cartesian indices of pointcloud
+    pc_cart_idx = point_to_cart_idx(np.expand_dims(pc, 0)).squeeze(0)
+
+    # Plot cartesian with overlaid points
+    if start_fig: fig = plt.figure()
+    img = plt.imshow(cart_img, cmap='gray')
+    plt.scatter(pc_cart_idx[:,0], pc_cart_idx[:,1], s=5, c='r', rasterized=True)
+
+    plt.xlim([0, cart_img.shape[0]])
+    plt.ylim([0, cart_img.shape[1]])
+    
+    # Remove x and y ticks
+    plt.xticks([])
+    plt.yticks([])
+    
+    return img

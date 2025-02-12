@@ -29,8 +29,6 @@ def extract_points_and_map(graph: Graph, v: Vertex, msg_prefix='', extract_raw_p
     else:
         p_ls_raw = p_ls
 
-    print(p_ls[:,0])
-
     p_map, T_r_map = extract_points_from_vertex(v, msg="submap_loc")  # "this" frame is the map frame
 
     teach_v = g_utils.get_closest_teach_vertex(v)
